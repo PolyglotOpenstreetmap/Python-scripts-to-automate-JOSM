@@ -1,0 +1,316 @@
+#!/bin/jython
+'''
+FindWaysBelongingToRoutesStartingFromStops.jy
+- Given a list of stops, find all ways belonging to the route
+
+This code is released under the GNU General
+Public License v2 or later.
+
+The GPL v3 is accessible here:
+http://www.gnu.org/licenses/gpl.html
+
+The GPL v2 is accessible here:
+http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+It comes with no warranty whatsoever.
+
+'''
+from javax.swing import JOptionPane
+from org.openstreetmap.josm import Main
+import org.openstreetmap.josm.command as Command
+import org.openstreetmap.josm.data.osm.Node as Node
+import org.openstreetmap.josm.data.osm.Way as Way
+import org.openstreetmap.josm.data.osm.Relation as Relation
+import org.openstreetmap.josm.data.Bounds as Bounds
+import org.openstreetmap.josm.data.osm.visitor.BoundingXYVisitor as BoundingXYVisitor
+import org.openstreetmap.josm.data.osm.TagCollection as TagCollection
+import org.openstreetmap.josm.data.osm.DataSet as DataSet
+import org.openstreetmap.josm.data.osm.RelationMember as RelationMember
+import org.openstreetmap.josm.actions.search.SearchAction as SearchAction
+import re, time, sys
+import codecs
+
+dummyRelation = Relation(); dummyWay = Way(); dummyNode = Node()
+
+
+sideEffects = {
+    'addWayToRoute': None,
+    'createStopAreaRelations': None,
+    }
+
+logVerbosity = 50
+'''
+10: only report problems that require attention
+20: report on collection
+30: report on network nodes
+40: report on which routes are being checked
+50: report everything
+'''
+
+def getMapView():
+    if Main.main and Main.main.map:
+        return Main.main.map.mapView
+    else:
+        return None
+
+
+        
+dummy_way = Way()
+dummy_relation = Relation()
+operatorsDict = {}; networksDict = {}
+
+print
+print "****************************************"
+
+SearchAction.search('inview highway=bus_stop | (public_transport: -type:relation) | amenity=waste_basket | amenity=bench | amenity=shelter | railway=tram_stop',SearchAction.SearchMode.fromCode('R'))
+
+mv = getMapView()
+if mv and mv.editLayer and mv.editLayer.data:
+    commandsList = []; i=0; names = {}; modified = False; platformNodes = {}; stopPosition = False
+
+    selectedNodes = mv.editLayer.data.getSelectedNodes()
+    selectedWays = mv.editLayer.data.getSelectedWays()
+    
+    if len(selectedNodes) > 6 or len(selectedWays) > 2:
+        print 'Search contains too many elements for creating a stop_area relation'
+    else:
+        for node in selectedNodes:
+            for key in node.getKeys():
+                if ('public_transport' in key and node.get('public_transport') == 'platform' or
+                    'highway' in key and node.get('highway') == 'bus_stop' or
+                    'railway' in key and (node.get('railway') == 'tram_stop' or
+                                          node.get('railway') == 'station')):                    
+                    print node
+                    platformNodes[str(node.getId())] = node
+                    if 'name' in node.getKeys():
+                        names[node.get('name')] = None
+                    operators = node.get('operator')
+                    print operators, node.get('route_ref'), node.get('route_ref:De_Lijn')
+                    for operator in operators.split(';'):
+                        if operator and not(operator in operatorsDict):
+                            operatorsDict[operator] = None
+                    if not('operator' in node.getKeys()):
+                        operatorsDict['STIB/MIVB'] = None
+                    networks = node.get('network')
+                    print networks, operators
+                    if not(networks) and 'STIB/MIVB' in operatorsDict: networks = 'IBXL'
+                    if networks:
+                        for network in networks.split(';'):
+                            print network
+                            if network and not(network in networksDict):
+                                networksDict[network] = None
+
+        print 'len(platformNodes)', len(platformNodes)
+        if len(platformNodes) > 0:
+            ''' We found a platform node. Now we need to figure out which one is the oldest. It has the lowest ID, but new nodes get assigned '0'.'''
+            print 'platformNodes', platformNodes
+            nodeslist = []
+            for j in platformNodes.keys():
+                print 'j, l ', j
+                if long(j) > long(0): nodeslist.append(long(j))
+            if len(nodeslist):
+                oldestNodeId = str(min(nodeslist))
+            else:
+                oldestNodeId = '0'
+            print oldestNodeId
+            newNode = Node(platformNodes[oldestNodeId])
+            
+            if len(platformNodes) > 1:
+                '''We found more than 1 platform node, so we need to
+                   merge all nodes onto the oldest node
+                   Begin by transfering the tags'''
+                for platformNodeId in platformNodes:
+                    if platformNodeId != oldestNodeId:
+                        for tag in platformNodes[platformNodeId].getKeys():
+                            print tag, 'platformNodes[platformNodeId].get(tag) ', platformNodes[platformNodeId].get(tag)
+                            if not(platformNodes[platformNodeId].get(tag) == newNode.get(tag)):
+                                print 'newNode.getKeys() ', newNode.getKeys()
+                                if tag in newNode.getKeys():
+                                    if not(platformNodes[platformNodeId].get(tag) in newNode.get(tag)):
+                                        newTag = newNode.get(tag) + ';' + platformNodes[platformNodeId].get(tag)
+                                else:
+                                    newTag = platformNodes[platformNodeId].get(tag)
+                                newNode.put(tag, newTag)
+            if len(platformNodes) > 0:
+                newNode.remove('odbl')
+                operators = ';'.join([str(x) for x in sorted(operatorsDict.keys())])
+                if operators: newNode.put('operator', operators)
+                networks = ';'.join([str(x) for x in sorted(networksDict.keys())])
+                if networks: newNode.put('network', networks)
+                commandsList.append(Command.ChangeCommand(platformNodes[oldestNodeId], newNode)) 
+        
+            notFound = True
+            for relation in platformNodes[oldestNodeId].getReferrers():
+                if relation.get('type') == 'public_transport' and relation.get('public_transport') == 'stop_area':
+                    notFound = False
+                    break
+            if notFound:
+                recycled=False
+                newRelation = Relation()
+
+            else:
+                recycled=True
+                newRelation = Relation(relation)
+                newRelation.removeAll()
+                newRelation.setMembers(None)
+
+        if len(platformNodes) > 0:
+            newMember = RelationMember('platform',platformNodes[oldestNodeId])
+            if not(newMember in newRelation.getMembers()):
+                newRelation.addMember(i, newMember)
+                i+=1
+                modified = True
+
+            for node in selectedNodes:
+                for key in node.getKeys():
+                    ''' stop_position '''
+                    if 'public_transport' in key and \
+                                node.get('public_transport') == 'stop_position':
+                        newMember = RelationMember('stop',node)
+                        if node.isNew: stopPosition = node
+                        if not(newMember in newRelation.getMembers()):
+                            newRelation.addMember(i, newMember)
+                            i+=1
+                            modified = True
+
+            for way in selectedWays:
+                for key in way.getKeys():
+                    ''' Platform way or area'''
+                    if 'public_transport' in key and \
+                                way.get('public_transport') == 'platform':
+                        newMember = RelationMember('platform',way)
+                        if not(newMember in newRelation.getMembers()):
+                            newRelation.addMember(i, newMember)
+                            i+=1
+                            modified = True
+
+            for way in selectedWays:
+                for key in way.getKeys():
+                    ''' shelter '''
+                    if 'amenity' in key and \
+                                way.get('amenity') == 'shelter':
+                        newMember = RelationMember(None,way)
+                        if not(newMember in newRelation.getMembers()):
+                            newRelation.addMember(i, newMember)
+                            i+=1
+                            modified = True
+
+            for node in selectedNodes:
+                for key in node.getKeys():
+                    ''' bench as node'''
+                    if 'amenity' in key and \
+                                node.get('amenity') == 'bench':
+                        newMember = RelationMember(None,node)
+                        if not(newMember in newRelation.getMembers()):
+                            newRelation.addMember(i, newMember)
+                            i+=1
+                            modified = True
+
+            for way in selectedWays:
+                for key in way.getKeys():
+                    ''' bench as way'''
+                    if 'amenity' in key and \
+                                way.get('amenity') == 'bench':
+                        newMember = RelationMember(None,way)
+                        if not(newMember in newRelation.getMembers()):
+                            newRelation.addMember(i, newMember)
+                            i+=1
+                            modified = True
+
+            for node in selectedNodes:
+                for key in node.getKeys():
+                    ''' waste_basket '''
+                    if 'amenity' in key and \
+                                node.get('amenity') == 'waste_basket':
+                        newMember = RelationMember(None,node)
+                        if not(newMember in newRelation.getMembers()):
+                            newRelation.addMember(i, newMember)
+                            i+=1
+                            modified = True
+
+            longestName=''
+            print 'names', names
+            for name in names.keys():
+                if name>longestName: longestName = name
+
+            if longestName: newRelation.put('name', longestName)
+            newRelation.put('type', 'public_transport')
+            newRelation.put('public_transport', 'stop_area')
+                    
+            if modified:
+                #print dir(Command)
+                if recycled: 
+                    commandsList.append(Command.ChangeCommand(relation, newRelation))
+                    newMemberForStopAreaGroup = RelationMember('', relation)
+                else:
+                    commandsList.append(Command.AddCommand(newRelation))
+                    newMemberForStopAreaGroup = RelationMember('', newRelation)
+                Main.main.undoRedo.add(Command.SequenceCommand("Creating stop_area relation for " + longestName, commandsList))
+
+                
+
+                notFound = True; commandsList =[]
+
+                for relation in mv.editLayer.data.getRelations():
+                    if relation.get('public_transport') == 'stop_area_group' and  \
+                                            longestName == relation.get('name'):
+                        print longestName, relation.get('name'), len(relation.getMembers())
+                        if len(relation.getMembers())>0:
+                            if type(dummyRelation) == type(relation.getMembers()[0].getMember()):
+                                print '1 found with relation as member'
+                                if not(newMemberForStopAreaGroup in relation.getMembers()):
+                                    newStopAreaGroup = Relation(relation)
+                                    newStopAreaGroup.addMember(newMemberForStopAreaGroup)
+                                    print 'Adding stop_area to existing stop area group ', longestName
+                                    commandsList.append(Command.ChangeCommand(relation, newStopAreaGroup))
+                                    Main.main.undoRedo.add(Command.SequenceCommand("Adding stop_area to existing stop area GROUP " + longestName, commandsList))
+                                notFound = False
+                                break
+                if notFound:
+                    newStopAreaGroup = Relation()
+                    newStopAreaGroup.addMember(newMemberForStopAreaGroup)
+                    newStopAreaGroup.put('name', longestName)
+                    newStopAreaGroup.put('type', 'public_transport')
+                    newStopAreaGroup.put('public_transport', 'stop_area_group')
+                    print 'Creating new stop area group'
+                    commandsList.append(Command.AddCommand(newStopAreaGroup))
+                Main.main.undoRedo.add(Command.SequenceCommand("Creating new stop area GROUP for " + longestName, commandsList))
+                print dir(Command)
+                commandsList = []
+                #sys.exit()
+                for platformNodeId in platformNodes:
+                    if platformNodeId != oldestNodeId:
+                        notMemberOfWay = True
+                        memberOfRelationsList = []
+                        for referrer in platformNodes[platformNodeId].getReferrers():
+                            if type(referrer) == type(dummyWay):
+                                notMemberOfWay = False
+                            if type(referrer) == type(dummyRelation):
+                                memberOfRelationsList.append(referrer)
+                        if notMemberOfWay:
+                            commandsList.append(Command.DeleteCommand(platformNodes[platformNodeId]))
+                        else:
+                            # print dir(Node())
+                            newNode = platformNodes[platformNodeId]
+                            for tag in platformNodes[platformNodeId].getKeys():
+                                newNode.remove(tag)
+                            commandsList.append(Command.ChangeCommand(platformNodes[platformNodeId], newNode))
+                        for parentRelation in memberOfRelationsList:
+                            counter = 0
+                            for member in parentRelation.getMembers():
+                                # print parentRelation.get('ref'), counter
+                                if member.getType() == dummyNode.getType():
+                                    memberNode = member.getNode()
+                                    if memberNode == platformNodes[platformNodeId]:
+                                        newMember = RelationMember('platform', platformNodes[oldestNodeId])
+                                        newRelation = Relation(parentRelation)
+                                        newRelation.removeMember(counter)
+                                        newRelation.addMember(counter,newMember)
+                                        commandsList.append(Command.ChangeCommand(parentRelation, newRelation))
+                                        break
+                                counter +=1
+
+                Main.main.undoRedo.add(Command.SequenceCommand("Removing unneeded platform nodes " + longestName, commandsList))
+
+        else:
+            print "There were no highway=bus_stop/public_transport=platform nodes"

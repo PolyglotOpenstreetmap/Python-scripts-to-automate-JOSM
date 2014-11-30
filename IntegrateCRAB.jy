@@ -1,0 +1,273 @@
+#!/bin/jython
+'''
+CheckRouteOrNetworkOrCollectionOfRoutes.jy
+- Validation of a rXn route relation
+
+This code is released under the GNU General
+Public License v2 or later.
+
+The GPL v3 is accessible here:
+http://www.gnu.org/licenses/gpl.html
+
+The GPL v2 is accessible here:
+http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+It comes with no warranty whatsoever.
+
+This code illustrates how to use Jython (Python in the scripting plugin of JOSM) to:
+* loop over all members of a route relation
+* find out whether the member is a node, a way or a relation
+* add/change properties of a relation
+* remove properties of a relation
+* add members to a relation
+* remove members from a relation
+* sort all members backwards
+
+* How to set an element selected
+
+'''
+from javax.swing import JOptionPane
+from org.openstreetmap.josm import Main
+import org.openstreetmap.josm.command as Command
+import org.openstreetmap.josm.data.osm.Node as Node
+import org.openstreetmap.josm.data.osm.Way as Way
+import org.openstreetmap.josm.data.osm.Relation as Relation
+import org.openstreetmap.josm.data.Bounds as Bounds
+import org.openstreetmap.josm.data.osm.visitor.BoundingXYVisitor as BoundingXYVisitor
+import org.openstreetmap.josm.data.osm.TagCollection as TagCollection
+import org.openstreetmap.josm.data.osm.DataSet as DataSet
+import org.openstreetmap.josm.data.osm.RelationMember as RelationMember
+import org.openstreetmap.josm.gui.dialogs.relation.DownloadRelationMemberTask as DownloadRelationMemberTask
+import org.openstreetmap.josm.actions.DownloadReferrersAction as DownloadReferrersAction
+import org.openstreetmap.josm.actions.AutoScaleAction as AutoScaleAction 
+import org.openstreetmap.josm.plugins.utilsplugin2.replacegeometry.ReplaceGeometryUtils as ReplaceGeometryUtils
+import org.openstreetmap.josm.plugins.utilsplugin2.selection.SelectAllInsideAction as SelectAllInsideAction
+import org.openstreetmap.josm.plugins.utilsplugin2.selection.NodeWayUtils as NodeWayUtils
+print dir(NodeWayUtils)
+#import org.openstreetmap.josm.plugins.todo.TodoListModel as TodoListModel
+#import org.openstreetmap.josm.plugins.todo.TodoDialog as TodoDialog
+import javax.swing.DefaultListSelectionModel as DefaultListSelectionModel
+import sys
+#import org.openstreetmap.josm.plugins.terracer.terracer.TerracerAction as TerracerAction
+
+
+
+# the file name where the report for the wiki goes, needs to be configurable
+wikiReportFN = 'C:/data/wikiReport.txt'
+# comment to disable side effect
+sideEffects = {}
+
+logVerbosity = 30
+'''
+10: only report problems that require attention
+20: report on collection
+30: report on network nodes
+40: report on which routes are being checked
+50: report everything
+'''
+
+dummy_node = Node()
+dummy_way = Way()
+dummy_relation = Relation()
+
+def getMapView():
+    if Main.main and Main.main.map:
+        return Main.main.map.mapView
+    else:
+        return None
+
+def findSuitableBuilding(node, ignorelist, zoomOutThisManyTimes=2, houseNumber=None, street=None, returnAllNearbyBuildings=False):
+    bboxCalculator = BoundingXYVisitor()
+    bboxCalculator.computeBoundingBox([node])
+    bboxCalculator.enlargeBoundingBox()
+    if bboxCalculator.getBounds():
+         mv.recalculateCenterScale(bboxCalculator)
+    mv.zoomTo(node.getEastNorth())
+    stopPosition = Node()
+    found = False
+    for i in range(1,zoomOutThisManyTimes):
+        candidates = mv.getAllNearest(mv.getPoint(node),ignorelist,Node().nodePredicate)
+        if candidates:
+            for candidate in candidates:
+                if candidate in ignorelist: break
+                candidateBuildings = []
+                for candidateBuilding in candidate.getReferrers():
+                    if candidateBuilding.getType() == dummy_way.getType():
+                        candidateBuildings.append(candidateBuilding)
+                if returnAllNearbyBuildings and i == zoomOutThisManyTimes: return candidateBuildings
+                #print candidateBuildings
+                found = False
+                for candidateBuilding in candidateBuildings:
+                    if houseNumber and \
+                          'addr:housenumber' in candidateBuilding.getKeys() and \
+                          candidateBuilding.get('addr:housenumber').upper() == houseNumber.upper():
+                        if 'addr:street' in candidateBuilding.getKeys() and street and \
+                              candidateBuilding.get('addr:street').upper() != street.upper():
+                            continue
+                            # if we find a building with the housenumber we were looking for, stop searching
+                        print 'Building with same housenumber'
+                        found = True; break
+                    if 'addr:housenumber' in candidateBuilding.getKeys():
+                        # If we find a building with another housenumber, add its nodes to the ignorelist
+                        print candidateBuilding.get('addr:housenumber') + " not a good candidate"
+                        for node in candidateBuilding.getNodes():
+                            ignorelist.append(node)
+                        continue
+                    if 'building' in candidateBuilding.getKeys():
+                        # If we get here, this means we found a building, without housenumber information, which may be a good candidate
+                        print 'found a good candidate building without a housenumber'
+                        found = True; break
+                else:
+                    ignorelist.append(candidate)
+                    print 'Ignoring ', candidate
+        #print found
+        if found:
+            break
+        else:
+            bboxCalculator.enlargeBoundingBox() # zoom out a bit and try again
+            if bboxCalculator.getBounds():
+                mv.recalculateCenterScale(bboxCalculator)
+    #print found
+    if not(found):
+        print 'Found no suitable candidate building'
+        return None
+    else:
+        print 'Returning ' + repr(candidateBuilding) + ' as the best candidate'
+        return candidateBuilding
+
+def transferTagsAndRelationMembershipFromNodeToWay(referenceNode, buildingWay, relation):
+    newBuilding = Way(buildingWay)
+    for key in referenceNode.getKeys():
+        newBuilding.put(key, referenceNode.get(key))
+    for key in ['addr:city', 'addr:country', 'addr:postcode', 'source']:
+        newBuilding.remove(key)
+    if buildingWay.get('building') == 'yes': 
+        newBuilding.put('building', 'house')
+
+    CommandsList=[Command.ChangeCommand( buildingWay, newBuilding)]
+    #Main.main.undoRedo.add(Command.SequenceCommand("Add tags to building", CommandsList))
+    
+    newRelation = Relation(relation)
+    counter = 0
+    for member in newRelation.getMembers():
+        #print member.getMember(), referenceNode
+        if member.getMember() == referenceNode: break
+        else: counter += 1
+    newRelation.removeMembersFor(referenceNode)
+    newMember = RelationMember('house', buildingWay)
+    if not(newMember in newRelation.getMembers()):
+        newRelation.addMember(counter, newMember)
+    
+    CommandsList.append(Command.ChangeCommand(relation, newRelation))
+    #Main.main.undoRedo.add(Command.SequenceCommand("Replace node with building in aS Relation", CommandsList))
+
+    print 'referenceNode is undeleted ', str(referenceNode.isDeleted())
+    if not(referenceNode.isDeleted()):
+        print 'deleting ' + str(referenceNode.get("addr:housenumber"))
+        CommandsList.append(Command.DeleteCommand(referenceNode))
+    Main.main.undoRedo.add(Command.SequenceCommand("Replace temp node with building in aS relation", CommandsList))
+
+      
+
+mv = getMapView()
+if mv and mv.editLayer and mv.editLayer.data:
+    selectedRelations = mv.editLayer.data.getSelectedRelations()
+    selectedWays = mv.editLayer.data.getSelectedWays()
+    selectedNodes = mv.editLayer.data.getSelectedNodes()
+    #todoList = TodoListModel(DefaultListSelectionModel())
+    #print type(todoList)
+    #print dir(todoList)
+    if not(selectedRelations or selectedWays or selectedNodes):
+        JOptionPane.showMessageDialog(Main.parent, "Please select an address node, a building or an associatedStreet relation")
+    else:
+        asrelations = []
+        for node in selectedNodes:
+            for parent in node.getReferrers():
+                #print dir(parent)
+                if parent.getType() == dummy_relation.getType() and parent.get('type') == 'associatedStreet':
+                    asrelations.append(parent)
+        for way in selectedWays:
+            for parent in way.getReferrers():
+                if parent.getType() == dummy_relation.getType() and parent.get('type') == 'associatedStreet':
+                    asrelations.append(parent)
+        for relation in selectedRelations:
+           for parentrelation in relation.getReferrers():
+               if parentrelation.get('type') == 'associatedStreet':
+                    asrelations.append(parent)
+        #First find all nearby buildings
+        nearbyBuildings = []
+        for relation in asrelations:
+            for member in relation.getMembers():
+                if member.isNode():
+                    node = member.getNode()
+                    building=findSuitableBuilding(node, [], zoomOutThisManyTimes=8, returnAllNearbyBuildings=True)
+                    if not(building in nearbyBuildings): nearbyBuildings.append(building)
+            print 'nearbyBuildings: ', nearbyBuildings
+            #if nearbyBuildings: Main.main.getEditLayer().data.setSelected(nearbyBuildings)
+            #JOptionPane.showInputDialog("All candidate buildings selected", None)
+            for building in nearbyBuildings:
+                #Main.main.getEditLayer().data.setSelected(building)
+                newWays ={}; nodesInsideBuilding ={}
+                nodesInsideBuilding = NodeWayUtils.selectAllInside([building], mv.editLayer.data)
+                #print '**** nodesInsideBuilding:', nodesInsideBuilding
+                if len(nodesInsideBuilding) == 2:
+                    for selected in nodesInsideBuilding:
+                        if selected.getType() == dummy_node.getType():
+                            nodeInsideBuilding = selected
+                        if selected.getType() == dummy_way.getType():
+                            building = selected
+                    transferTagsAndRelationMembershipFromNodeToWay(nodeInsideBuilding, building, relation)
+
+                
+
+        ignorelist = []; buildingsToIgnore = []
+        for zoomTries in range(2,5):
+            #for relation in asrelations:
+                #for member in relation.getMembers():
+                #    if member.isWay():
+                #        for node in member.getWay().getNodes():
+                #            ignorelist.append(node)
+                #    if member.isNode():
+                #        ignorelist.append(member.getNode())
+            for relation in asrelations:
+                memberCounter = -1
+                for member in relation.getMembers():
+                    memberCounter += 1
+                    if member.isWay() and not(member.getWay().get('addr:housenumber')):
+                        pass
+                    if member.isNode():
+                        node = member.getNode()
+                        if 'addr:housenumber' in node.getKeys():
+                            hn = node.get('addr:housenumber')
+                        print hn
+                        candidateBuilding = findSuitableBuilding(node, ignorelist, zoomOutThisManyTimes=zoomTries, houseNumber=hn, street=node.get('addr:street'))
+                        if candidateBuilding and not(candidateBuilding in buildingsToIgnore):
+                            candidateBuilding.get("addr:housenumber")
+                            buildingtype = candidateBuilding.get('building')
+                            street = candidateBuilding.get('addr:street')
+                            print buildingtype, street, node.get('addr:street'), candidateBuilding.get("addr:housenumber")
+                            candaddrhn=candidateBuilding.get("addr:housenumber")
+                            if buildingtype and not(buildingtype in ['garage','garages']):
+                                if street and street != node.get('addr:street'):
+                                    break
+                                Main.main.getEditLayer().data.setSelected([candidateBuilding, node])
+                                AutoScaleAction.autoScale("selection")
+                                print street, candaddrhn, node.get('addr:street'), node.get('addr:housenumber'), not(street == node.get('addr:street') and candaddrhn == node.get('addr:housenumber')), (street and candaddrhn and not(street == node.get('addr:street') and candaddrhn == node.get('addr:housenumber')))
+                                #JOptionPane.showInputDialog(None, None)
+                                if not(street or candaddrhn or (street == node.get('addr:street') and candaddrhn == node.get('addr:housenumber'))):
+                                    if not(street): street = 'No street'
+                                    if not(candaddrhn): candaddrhn = 'No number'
+                                    rc=JOptionPane.showInputDialog('(' + str(zoomTries) + ') Found ' + street +  ' ' + candaddrhn + ' for:', node.get('addr:street') + ' ' + node.get("addr:housenumber"))
+                                    print 'rc', rc
+                                    if rc == None:
+                                        continue
+                                    elif rc == 'q':
+                                        sys.Exit()
+                                    elif rc == 'i':
+                                        buildingsToIgnore.append(candidateBuilding)
+                                        continue
+                                    buildingsToIgnore.append(candidateBuilding)
+                                #print dir(candidateBuilding.getBBox())
+                                #print member
+                                transferTagsAndRelationMembershipFromNodeToWay(node, candidateBuilding, relation)
+                                #todoList.add([candidateBuilding])

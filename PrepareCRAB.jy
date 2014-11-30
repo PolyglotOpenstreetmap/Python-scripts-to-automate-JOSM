@@ -1,0 +1,146 @@
+#!/bin/jython
+'''
+FindWaysBelongingToRoutesStartingFromStops.jy
+- Given a list of stops, find all ways belonging to the route
+
+This code is released under the GNU General
+Public License v2 or later.
+
+The GPL v3 is accessible here:
+http://www.gnu.org/licenses/gpl.html
+
+The GPL v2 is accessible here:
+http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+It comes with no warranty whatsoever.
+
+'''
+from javax.swing import JOptionPane
+from org.openstreetmap.josm import Main
+import org.openstreetmap.josm.command as Command
+import org.openstreetmap.josm.data.osm.Node as Node
+import org.openstreetmap.josm.data.osm.Way as Way
+import org.openstreetmap.josm.data.osm.Relation as Relation
+import org.openstreetmap.josm.data.Bounds as Bounds
+import org.openstreetmap.josm.data.osm.visitor.BoundingXYVisitor as BoundingXYVisitor
+import org.openstreetmap.josm.data.osm.TagCollection as TagCollection
+import org.openstreetmap.josm.data.osm.DataSet as DataSet
+import org.openstreetmap.josm.data.osm.RelationMember as RelationMember
+import org.openstreetmap.josm.actions.search.SearchAction as SearchAction
+
+dummyRelation = Relation(); dummyWay = Way()
+
+sideEffects = {
+    'addWayToRoute': None,
+    'createStopAreaRelations': None,
+    }
+
+logVerbosity = 50
+'''
+10: only report problems that require attention
+20: report on collection
+30: report on network nodes
+40: report on which routes are being checked
+50: report everything
+'''
+
+def getMapView():
+    if Main.main and Main.main.map:
+        return Main.main.map.mapView
+    else:
+        return None
+
+dummy_way = Way()
+dummy_relation = Relation()
+
+print
+print "****************************************"
+
+cleanupTags=[['odbl',         ['CRAB:huisnrlabel', 'CRAB:hnrLabel', 'CRAB:hnrLabels']],
+             ['tiger:source', ['CRAB:source', 'CRAB:herkomst']],
+             ['yh:TYPE', ['addr:postcode']],
+             ['yh:LINE_NAME', ['addr:city']],
+             ['addr:flats',   ['CRAB:message']]
+            ]
+SearchAction.search('inview new "addr:housenumber" type:node', SearchAction.SearchMode.fromCode('R'))
+
+mv = getMapView()
+if mv and mv.editLayer and mv.editLayer.data:
+    commandsList = []; i=0; names = {}; modified = False
+
+    relationStillNeedsToBeCreated = True
+
+    for node in mv.editLayer.data.getSelectedNodes():
+        for key in node.getKeys():
+            if ('addr:street' in node.getKeys()):
+                if relationStillNeedsToBeCreated:
+                    notFound = True
+                    for relation in node.getReferrers():
+                        if relation.get('type') == 'associatedStreet':
+                            notFound = False
+                            break
+                    if notFound:
+                        recycled=False
+                        newRelation = Relation(dummyRelation)
+                        relationStillNeedsToBeCreated = False
+                    else:
+                        recycled=True
+                        newRelation = Relation(relation)
+                        newRelation.removeAll()
+                        relationStillNeedsToBeCreated = False
+
+                newMember = RelationMember('house',node)
+                if not(newMember in newRelation.getMembers()):
+                    newRelation.addMember(i, newMember)
+                    i+=1
+                    modified = True
+            newNode=Node(node)
+            nodeTags = node.getKeys()
+            for replaceWith, replaceThese in cleanupTags:
+                for replaceThis in replaceThese:
+                    if replaceThis in nodeTags:
+                        newNode.put(replaceWith, node.get(replaceThis))
+                        newNode.remove(replaceThis)
+            commandsList.append(Command.ChangeCommand(node, newNode))
+
+    newRelation.put('type', 'associatedStreet')
+    newRelation.put('name', node.get('addr:street'))
+    newRelation.put('addr:country', 'BE')
+
+    if ('addr:city' in nodeTags):
+        newRelation.put('addr:city', node.get('addr:city'))
+    elif ('yh:LINE_NAME' in nodeTags):
+        newRelation.put('addr:city', node.get('yh:LINE_NAME'))
+    else:
+        newRelation.put('addr:city', 'GemeenteOnbekend')
+
+    if ('addr:postcode' in nodeTags):
+        newRelation.put('addr:postcode', node.get('addr:postcode'))
+    elif ('yh:TYPE' in nodeTags):
+        newRelation.put('addr:postcode', node.get('yh:TYPE'))
+    else:
+        newRelation.put('addr:postcode', 'PostnummerOnbekend')
+    newRelation.put('addr:country', 'BE')
+
+    SearchAction.search(node.get('addr:street') + ' type:way -building', SearchAction.SearchMode.fromCode('R'))
+
+    for way in mv.editLayer.data.getSelectedWays():
+        if way.get('building'):
+            newMember = RelationMember('house',way)
+        else:
+            newMember = RelationMember('street',way)
+        if not(newMember in newRelation.getMembers()):
+            newRelation.addMember(i, newMember)
+            i+=1
+            modified = True
+    
+    #print dir(mv)
+ 
+    if modified:
+        #print dir(Command)
+        if recycled: commandsList.append(Command.ChangeCommand(relation, newRelation))
+        else: commandsList.append(Command.AddCommand(newRelation))
+        Main.main.undoRedo.add(Command.SequenceCommand("Creating associatedStreet relation for " + node.get('addr:street'), commandsList))
+        commandsList = []
+        
+            

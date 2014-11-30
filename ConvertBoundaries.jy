@@ -1,0 +1,248 @@
+#!/bin/jython
+'''
+
+This code is released under the GNU General
+Public License v2 or later.
+
+The GPL v3 is accessible here:
+http://www.gnu.org/licenses/gpl.html
+
+The GPL v2 is accessible here:
+http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+It comes with no warranty whatsoever.
+
+This code illustrates how to use Jython (Python in the scripting plugin of JOSM) to:
+* loop over all members of a relation
+* find out whether the member is a node, a way or a relation
+* add/change properties of a relation
+* remove properties of a relation
+
+* How to set an element selected
+
+'''
+from javax.swing import JOptionPane
+from org.openstreetmap.josm import Main
+import org.openstreetmap.josm.command as Command
+import org.openstreetmap.josm.data.osm.Node as Node
+import org.openstreetmap.josm.data.osm.Way as Way
+import org.openstreetmap.josm.data.osm.Relation as Relation
+import org.openstreetmap.josm.data.osm.TagCollection as TagCollection
+import org.openstreetmap.josm.data.osm.DataSet as DataSet
+import org.openstreetmap.josm.data.osm.RelationMember as RelationMember
+import org.openstreetmap.josm.gui.dialogs.relation.DownloadRelationMemberTask as DownloadRelationMemberTask
+import org.openstreetmap.josm.actions.DownloadReferrersAction as DownloadReferrersAction
+import org.openstreetmap.josm.actions.AutoScaleAction as AutoScaleAction
+import org.openstreetmap.josm.actions.SplitWayAction as SplitWayAction
+import org.openstreetmap.josm.actions.JoinNodeWayAction as JoinNodeWayAction
+import java.awt.event.ActionEvent as ActionEvent
+import org.openstreetmap.josm.data.Bounds as Bounds
+import org.openstreetmap.josm.data.osm.visitor.BoundingXYVisitor as BoundingXYVisitor
+import re, time, math
+import codecs
+
+def angledistance(lonsrc, latsrc, londst, latdst):
+    """
+Compute heading and distance from (lonsrc, latsrc) to (londst, latdst).
+Return (heading, distance) in radians.
+"""
+
+    rlat1 = math.radians(latsrc)
+    rlon1 = math.radians(lonsrc)
+    rlat2 = math.radians(latdst)
+    rlon2 = math.radians(londst)
+    head = math.atan2(math.sin(rlon2-rlon1) * math.cos(rlat2),
+                      math.cos(rlat1) * math.sin(rlat2) -
+                      math.sin(rlat1) * math.cos(rlat2) * math.cos(rlon2-rlon1)
+                     ) / math.pi * 180.0
+    p = math.sin((rlat2-rlat1)/2)**2 + math.cos(rlat1) * math.cos(rlat2) * math.sin((rlon2-rlon1)/2)**2
+    adist = 2 * math.atan2(math.sqrt(p), math.sqrt(1-p))
+    return (head, adist)
+    
+def getdeviation(diffangle, adist0, adist1, adist2):
+    """
+Compute distance (in meters) from point P to line AB.
+Return distance to A or B if projected point doesn't exist on line.
+"""
+
+    if abs(diffangle) < 90.0:
+        # Compute cross-track error
+        e = math.asin(math.sin(adist1)*math.sin(math.radians(diffangle)))
+        d = math.acos(math.cos(adist1)/math.cos(e))
+        if d > adist0:
+            # Point is after line AB, return distance to B
+            e=adist2
+    else:
+        # Point is before line AB, return distance to A
+        e=adist1
+    return abs(e)*6371000.0
+    
+def diffheading(angle1, angle2):
+    """ Return difference of angles in radians. """
+
+    diffangle = angle1 - angle2
+    if diffangle < -180:
+        diffangle += 360
+    elif diffangle > 180:
+        diffangle -= 360
+    return diffangle
+
+
+
+def simplifyPoints(points):
+    """
+Simplify a line (ordered list of points).
+Use a Douglas-Peucker with a small distance and preserve big angles.
+"""
+
+    # The first and last point are never simplified (for a line)
+    # but for a ring this means that one point which could possibly be
+    # simplified will never be tried
+    resultpnt = [ points[0] ]
+    deletepnt = []
+    pnt1 = 0
+    stack = [ len(points)-1 ]
+    # print (points[0].getCoor())
+
+    while len(stack) > 0:
+        # Compute angle and distance to find the most significant point
+        # between pnt1 and pnt2
+        pnt2 = stack[-1]
+        # print dir(points[pnt1].getCoor())
+        lat1 = points[pnt1].getCoor().getX()
+        lon1 = points[pnt1].getCoor().getY()
+        lat2 = points[pnt2].getCoor().getX()
+        lon2 = points[pnt2].getCoor().getY()
+        angle_0, dist_0 = angledistance(lat1, lon1,
+                                        lat2, lon2)
+        pntfound = None
+        devfound = 0
+        for pt in xrange(pnt1+1, pnt2):
+            latpt = points[pt].getCoor().getX()
+            lonpt = points[pt].getCoor().getY()
+            angle_1, dist_1 = angledistance(lat1, lon1,
+                                            latpt, lonpt)
+            angle_2, dist_2 = angledistance(latpt, lonpt,
+                                            lat2, lon2)
+            deviation = getdeviation(diffheading(angle_0, angle_1),
+                                     dist_0, dist_1, dist_2)
+            if deviation > devfound:
+                if deviation >= 2.0:
+                    pntfound = pt
+                    devfound = deviation
+                elif deviation >= 0.3:
+                    diffangle = diffheading(angle_2, angle_1)
+                    if abs(diffangle) >= 40.0 - abs(deviation)*16.0:
+                        pntfound = pt
+                        devfound = deviation
+
+        if pntfound is None:
+            deletepnt.extend([ points[i] for i in xrange(pnt1+1,pnt2) ])
+            pnt1 = stack.pop()
+            resultpnt.append(points[pnt1])
+        else:
+            stack.append(pntfound)
+
+    return (resultpnt, deletepnt)
+
+def getMapView():
+    if Main.main and Main.main.map:
+        return Main.main.map.mapView
+    else:
+        return None
+
+dummy_way = Way()
+dummy_relation = Relation()
+
+mv = getMapView()
+commandsList = []
+if mv and mv.editLayer and mv.editLayer.data:
+    selectedRelations = mv.editLayer.data.getSelectedRelations()
+    selectedWays = mv.editLayer.data.getSelectedWays()
+    selectedNodes = mv.editLayer.data.getSelectedNodes()
+    nodecounts = {}
+
+    if not(selectedRelations or selectedWays or selectedNodes):
+        JOptionPane.showMessageDialog(Main.parent, "Please select a way acting as a boundary")
+    else:
+        asrelations = []
+        count = 0; alreadySelected = False
+        for way in selectedWays:
+            goodnodes = simplifyPoints(way.getNodes())[0]
+            # print goodnodes
+            newWay = Way(way)
+            # print dir(newWay)
+            newWay.removeAll()
+            print newWay
+            newWay.setNodes(goodnodes)
+            newWay.put('boundary','administrative')
+            # print "--------------New WAY ---------", newWay
+            commandsList.append(Command.ChangeCommand(way, newWay))
+            Main.main.undoRedo.add(Command.SequenceCommand("Simplifying way", commandsList))
+            commandsList = []
+                
+        '''
+            # print dir(way)
+            for waynode in way.getNodes():
+                if len(waynode.getReferrers()) < 2:
+                    AutoScaleAction.zoomToSelection()
+                    # Main.main.getCurrentDataSet().setSelected(waynode)
+                    # bboxCalculator = BoundingXYVisitor()
+                    # bboxCalculator.computeBoundingBox([waynode])
+                    # bboxCalculator.enlargeBoundingBox()
+                    # if bboxCalculator.getBounds():
+                       # mv.recalculateCenterScale(bboxCalculator)
+                    # time.sleep(1)
+                    # mv.updateUI()
+                    JoinNodeWayAction().actionPerformed(ActionEvent(1, 2, ""))
+            for waynode in way.getNodes():
+                prevcount = count
+                count = len(waynode.getReferrers())
+                nodecounts[count]=count
+                if not(alreadySelected) and count > prevcount:
+                    print prevcount, count
+                    Main.main.getCurrentDataSet().addSelected(waynode)
+                    alreadySelected = True
+                elif not(alreadySelected) and prevcount > count:
+                    print prevcount, count
+                    Main.main.getCurrentDataSet().addSelected(prevnode)
+                    alreadySelected = True
+                else:
+                    alreadySelected = False
+                prevnode = waynode
+            # print dir(SplitWayAction)
+            newBoundary = Relation(); commandslist = []
+            newMember = RelationMember("outer",way)
+            newBoundary.addMember(newBoundary.getMembersCount(), newMember)
+
+            newWay = Way(way)
+            tags = {'DNAME_2010': 'name',
+                    'DNAME_2006': 'old_name',
+                    'SUBREGION': 'region',}
+            wasStillHasTags = False
+            for key in way.getKeys():
+                if key in tags:
+                    newBoundary.put(tags[key], way.get(key).title())
+                    newWay.remove(key)
+                    wasStillHasTags = True
+            if wasStillHasTags and newBoundary.get('name').title() == newBoundary.get('old_name').title(): newBoundary.remove('old_name') 
+            newBoundary.put('type', 'boundary')
+            newBoundary.put('boundary', 'administrative')
+            newBoundary.put('admin_level', '4')
+            if wasStillHasTags:
+                Main.main.undoRedo.add(Command.SequenceCommand("Creating boundary for " + newBoundary.get('name').title(), commandsList))
+                commandsList = []
+                commandsList.append(Command.AddCommand(newBoundary))
+                commandsList = []
+                commandsList.append(Command.ChangeCommand(way, newWay))
+                Main.main.undoRedo.add(Command.SequenceCommand("Removing tags on way for " + newBoundary.get('name').title(), commandsList))
+                # print dir(newBoundary)
+            SplitWayAction().actionPerformed(ActionEvent(1, 2, ""))
+            
+            for memberWay in newBoundary.getMembers():
+                # get node in the middle of the way member
+                middleNode=memberWay.getWay().getNodes()[memberWay.getWay().getNodesCount()/2]
+                ignorelist = newBoundary.getMembers()
+                candidates = mv.getAllNearest(mv.getPoint(middleNode),ignorelist,Way().wayPredicate)
+                print candidates[0].get('DNAME_2010')
+        '''

@@ -1,0 +1,219 @@
+#!/bin/jython
+'''
+CheckRouteOrNetworkOrCollectionOfRoutes.jy
+- Validation of a rXn route relation
+
+This code is released under the GNU General
+Public License v2 or later.
+
+The GPL v3 is accessible here:
+http://www.gnu.org/licenses/gpl.html
+
+The GPL v2 is accessible here:
+http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+It comes with no warranty whatsoever.
+
+This code illustrates how to use Jython (Python in the scripting plugin of JOSM) to:
+* loop over all members of a route relation
+* find out whether the member is a node, a way or a relation
+* add/change properties of a relation
+* remove properties of a relation
+* add members to a relation
+* remove members from a relation
+* sort all members backwards
+
+* How to set an element selected
+
+'''
+from javax.swing import JOptionPane
+from org.openstreetmap.josm import Main
+import org.openstreetmap.josm.command as Command
+import org.openstreetmap.josm.data.osm.Node as Node
+import org.openstreetmap.josm.data.osm.Way as Way
+import org.openstreetmap.josm.data.osm.Relation as Relation
+import org.openstreetmap.josm.data.Bounds as Bounds
+import org.openstreetmap.josm.data.osm.visitor.BoundingXYVisitor as BoundingXYVisitor
+import org.openstreetmap.josm.data.osm.TagCollection as TagCollection
+import org.openstreetmap.josm.data.osm.DataSet as DataSet
+import org.openstreetmap.josm.data.osm.RelationMember as RelationMember
+import org.openstreetmap.josm.gui.dialogs.relation.DownloadRelationMemberTask as DownloadRelationMemberTask
+import org.openstreetmap.josm.actions.DownloadReferrersAction as DownloadReferrersAction
+import org.openstreetmap.josm.actions.AutoScaleAction as AutoScaleAction
+import org.openstreetmap.josm.plugins.pluginproxy as Plugins
+print dir(Plugins)
+import org.openstreetmap.josm.plugins.utilsplugin2.replacegeometry as ReplaceGeometry
+
+import re, time
+import codecs
+
+
+# the file name where the report for the wiki goes, needs to be configurable
+wikiReportFN = 'C:/data/wikiReport.txt'
+# comment to disable side effect
+sideEffects = {
+    'addRouteToNetwork': None,
+    'removeNameRefKey_xx-yyAndcreated_by': None, 
+    'modifyNoteTo_xx-yy': None,
+    'flipOrderOfMembers': None, # such that ways go from lower rXn_ref to higher rXn_ref
+    #'sortRouteRelations': None,
+    #'sortNetworkRelations': None,
+    #'removeNodesFromRoutes': None,
+    #'addNodes2Routes': None,
+    #'selectObjects': None,
+    #'zoomToSelection': None,
+    #'downloadReferrersForNodes': None, # This will download all ways and relations for nodes with an rXn_ref
+    #'downloadReferrersForWays': None, # This will download all relations for ways that have an endnode with an rXn_ref
+    'downloadIncompleteMembers': None,
+    'createWikiReport': None,
+	'reportWhenWaysAreUsedInAnotherRelationToo': None,
+    'addFixmeTODOtags': None, # This will add todo tags to the data containing problems,
+                              # the intention is that these tags are removed before uploading,
+                              # once the reported problems are resolved
+    #'createGarminGPX': None, # not implemented yet
+    #'checkOneWays = False, # not implemented yet
+    }
+
+logVerbosity = 30
+'''
+10: only report problems that require attention
+20: report on collection
+30: report on network nodes
+40: report on which routes are being checked
+50: report everything
+'''
+
+def getMapView():
+    if Main.main and Main.main.map:
+        return Main.main.map.mapView
+    else:
+        return None
+
+def findSuitableBuilding(node, ignorelist):
+    bboxCalculator = BoundingXYVisitor()
+    bboxCalculator.computeBoundingBox([node])
+    bboxCalculator.enlargeBoundingBox()
+    if bboxCalculator.getBounds():
+         mv.recalculateCenterScale(bboxCalculator)
+    #mv.zoomTo(node.getEastNorth())
+    stopPosition = Node()
+    for i in range(1,2):
+        candidates = mv.getAllNearest(mv.getPoint(node),ignorelist,Node().nodePredicate)
+        found = False
+        if candidates:
+            #print len(candidates)
+            for candidate in candidates:
+                if candidate in ignorelist: break
+                #print candidate
+                #print dir(candidate)
+                for foundway in candidate.getReferrers():
+                    #print foundway
+                    #print dir(foundway)
+                    if foundway.get('ref:UrbIS'):
+                        #print 'found way with ref', foundway
+                        for node in foundway.getNodes():
+                            ignorelist.append(node)
+                        break
+                    if foundway.get('building'):
+                        found = True; break
+                else:
+                    ignorelist.append(candidate)
+                    print 'ignoring '
+                    #print candidate.getKeys()
+        if found:
+            break
+        else:
+            bboxCalculator.enlargeBoundingBox() # zoom out a bit and try again
+            if bboxCalculator.getBounds():
+                mv.recalculateCenterScale(bboxCalculator)
+    if not(found):
+        print 'Found no suitable candidate node'
+        return None
+    else:
+        return candidate
+
+dummy_way = Way()
+dummy_relation = Relation()
+
+mv = getMapView()
+if mv and mv.editLayer and mv.editLayer.data:
+    selectedRelations = mv.editLayer.data.getSelectedRelations()
+    selectedWays = mv.editLayer.data.getSelectedWays()
+    selectedNodes = mv.editLayer.data.getSelectedNodes()
+
+    if not(selectedRelations or selectedWays or selectedNodes):
+        JOptionPane.showMessageDialog(Main.parent, "Please select an address node, a building or an associatedStreet relation")
+    else:
+        asrelations = []
+        for node in selectedNodes:
+            #print dir(node)
+            for parent in node.getReferrers():
+                #print dir(parent)
+                if parent.getType() == dummy_relation.getType() and parent.get('type') == 'associatedStreet':
+                    asrelations.append(parent)
+        for way in selectedWays:
+            for parent in way.getReferrers():
+                if parent.getType() == dummy_relation.getType() and parent.get('type') == 'associatedStreet':
+                    asrelations.append(parent)
+        for relation in selectedRelations:
+           for parentrelation in relation.getReferrers():
+               if parentrelation.get('type') == 'associatedStreet':
+                    asrelations.append(parent)
+        ignorelist = []
+        for relation in asrelations:
+            for member in relation.getMembers():
+                if member.isWay():
+                    for node in member.getWay().getNodes():
+                        ignorelist.append(node)
+                if member.isNode():
+                    ignorelist.append(member.getNode())
+
+        for relation in asrelations:
+            for member in relation.getMembers():
+                if member.isWay():
+                    for node in member.getWay().getNodes():
+                        oldNode = findSuitableBuilding(node, ignorelist)
+                        if oldNode:
+                            #print oldNode.getReferrers()
+                            oldNodeReferrers = oldNode.getReferrers()
+                            if oldNodeReferrers:
+                                oldBuilding = oldNodeReferrers[0]
+                            else:
+                                continue
+                            if oldBuilding.get('building') and not(oldBuilding.get('ref:UrbIS')):
+                                print member
+                                newBuilding = member.getWay()
+                                for key in newBuilding.getKeys():
+                                    #print dir(oldBuilding)
+                                    oldBuilding.put(key, newBuilding.get(key))
+                                print oldBuilding
+                                replaceCommand = ReplaceGeometry.ReplaceGeometryUtils.buildReplaceWithNewCommand(newBuilding, oldBuilding)
+                                Main.main.undoRedo.add(replaceCommand)
+                                break
+
+                                ##newNodes = member.getWay().getNodes()
+                                #oldBuilding.removeNode(oldBuilding.lastNode(False))
+                                ##oldBuildingNodes = oldBuilding.getNodes()
+                                ##for node in oldBuildingNodes:
+                                    ##if newNodes:
+                                        ##node.setCoor(newNodes[0].getCoor())
+                                        #n = newNodes[0]
+                                        ##del newNodes[0]
+                                        #del n
+                                #JOptionPane.showMessageDialog(Main.parent, "Press a key")
+                                #oldBuilding.delNode(lastNode)
+                                #print dir(oldBuilding)
+                                ##for node in newNodes:
+                                    ##mv.updateUI()
+                                    ##AutoScaleAction.zoomToSelection()
+                                    ##mv.zoomToFactor(0.07)
+                                    ##res=JOptionPane.showOptionDialog(Main.parent, '', "Press a key", JOptionPane.OK_CANCEL_OPTION,JOptionPane.WARNING_MESSAGE,None,None,None)
+                                    ##if res: quit()
+                                    ##oldBuilding.addNode(0, node) # oldBuilding.getRealNodesCount(), node)
+                                    ##print oldBuilding
+
+                        #Main.main.getCurrentDataSet().addSelected(oldNode)
+
+                if member.isNode():
+                    node = member.getNode()
+

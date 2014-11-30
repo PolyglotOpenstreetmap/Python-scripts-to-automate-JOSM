@@ -1,0 +1,116 @@
+#!/bin/jython
+'''
+CheckRouteOrNetworkOrCollectionOfRoutes.jy
+- Validation of a rXn route relation
+
+This code is released under the GNU General
+Public License v2 or later.
+
+The GPL v3 is accessible here:
+http://www.gnu.org/licenses/gpl.html
+
+The GPL v2 is accessible here:
+http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+It comes with no warranty whatsoever.
+
+This code illustrates how to use Jython (Python in the scripting plugin of JOSM) to:
+* loop over all members of a route relation
+* find out whether the member is a node, a way or a relation
+* add/change properties of a relation
+* remove properties of a relation
+* add members to a relation
+* remove members from a relation
+* sort all members backwards
+
+* How to set an element selected
+
+'''
+from javax.swing import JOptionPane
+from org.openstreetmap.josm import Main
+import org.openstreetmap.josm.command as Command
+import org.openstreetmap.josm.data.osm.Node as Node
+import org.openstreetmap.josm.data.osm.Way as Way
+import org.openstreetmap.josm.data.osm.Relation as Relation
+import org.openstreetmap.josm.data.osm.TagCollection as TagCollection
+import org.openstreetmap.josm.data.osm.DataSet as DataSet
+import org.openstreetmap.josm.data.osm.RelationMember as RelationMember
+import org.openstreetmap.josm.gui.dialogs.relation.DownloadRelationMemberTask as DownloadRelationMemberTask
+import org.openstreetmap.josm.actions.DownloadReferrersAction as DownloadReferrersAction
+import org.openstreetmap.josm.actions.AutoScaleAction as AutoScaleAction
+import re, time
+import codecs
+
+def getMapView():
+    if Main.main and Main.main.map:
+        return Main.main.map.mapView
+    else:
+        return None
+
+dummy_way = Way()
+dummy_relation = Relation()
+
+mv = getMapView()
+if mv and mv.editLayer and mv.editLayer.data:
+    selectedRelations = mv.editLayer.data.getSelectedRelations()
+    selectedWays = mv.editLayer.data.getSelectedWays()
+    selectedNodes = mv.editLayer.data.getSelectedNodes()
+
+    if not(selectedRelations or selectedWays or selectedNodes):
+        JOptionPane.showMessageDialog(Main.parent, "Please select an address node, a building or an associatedStreet relation")
+    else:
+        asrelations = []
+        for node in selectedNodes:
+            #print dir(node)
+            for parent in node.getReferrers():
+                #print dir(parent)
+                if parent.getType() == dummy_relation.getType() and parent.get('type') == 'associatedStreet':
+                    asrelations.append(parent)
+        for way in selectedWays:
+            for parent in way.getReferrers():
+                if parent.getType() == dummy_relation.getType() and parent.get('type') == 'associatedStreet':
+                    asrelations.append(parent)
+        for relation in selectedRelations:
+           if parentrelation.get('type') == 'associatedStreet':
+                asrelations.append(parent)
+
+        buildingsWithoutAddresses = {}
+        for way in mv.getActiveLayer().data.getWays():
+            if way.get('building') and not way.get('addr:housenumber'):
+                buildingsWithoutAddresses[way.get('ref:UrbIS')] = way
+        #print buildingsWithoutAddresses
+        urbISNodesWithoutASRelation = {}
+        for node in mv.getActiveLayer().data.getNodes():
+            if node.get('ref:UrbIS') and not node.getReferrers():
+                urbISNodesWithoutASRelation[node.get('ref:UrbIS')] = node
+        print urbISNodesWithoutASRelation
+        for relation in asrelations:
+            Main.main.getCurrentDataSet().addSelected(relation)
+            newAssStrRel = Relation(relation); modified = False; commandsList = []; lowPos = 1
+            #print relation
+            for member in relation.getMembers():
+                #print dir(member)
+                print lowPos, member.getMember().get('addr:housenumber')
+                if member.isNode():
+                    node = member.getNode()
+                    print node
+                    ref = node.get('ref:UrbIS')
+                    print ref, ref in buildingsWithoutAddresses
+                    if ref in buildingsWithoutAddresses:
+                        newMember = RelationMember("house",buildingsWithoutAddresses[ref])
+                        del buildingsWithoutAddresses[ref]
+                        newAssStrRel.addMember(lowPos, newMember)
+                        modified = True
+                    if ref in urbISNodesWithoutASRelation:
+                        newMember = RelationMember("house",urbISNodesWithoutASRelation[ref])
+                        del urbISNodesWithoutASRelation[ref]
+                        newAssStrRel.addMember(lowPos, newMember)
+                        modified = True
+                lowPos += 1
+            if modified:
+                commandsList.append(Command.ChangeCommand(relation, newAssStrRel))
+            
+                Main.main.undoRedo.add(Command.SequenceCommand("Adding buildings without address information", commandsList))
+                commandsList = []
+            Main.main.getCurrentDataSet().addSelected(relation.getMembers())
+

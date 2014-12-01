@@ -16,6 +16,7 @@ It comes with no warranty whatsoever.
 
 '''
 from javax.swing import JOptionPane
+from types import *
 from org.openstreetmap.josm import Main
 import org.openstreetmap.josm.command as Command
 import org.openstreetmap.josm.data.osm.Node as Node
@@ -178,6 +179,7 @@ def FindRouteRelationWithTheLongestSequenceOfStopsInCommon(route, node):
             relationType = parentRelationOfNode.get('type')
             if relationType and relationType == 'route':
                 ptVersion = parentRelationOfNode.get('public_transport:version')
+                print ptVersion, parentRelationOfNode.get('name')
                 if ptVersion and ptVersion == '2':
                     nextStops = ''; startAdding = False
                     for member in parentRelationOfNode.getMembers():
@@ -314,19 +316,24 @@ def getSequenceOfWays(stopsSequence, route, comparableRoute):
             if member.isWay(): waysSequence.append(member.getMember())
     return waysSequence
     
-def addWayToRoute(wayToAdd, newRelation, pos, objectToGetNameForRoleFrom, waymemberslist):
+def addWayToRoute(wayToAdd, newRelation, pos, offset, objectToGetNameForRoleFrom, waymemberslist):
     depth = len(waymemberslist)
     if depth > 3: depth = -3
     else: depth = -1 * depth
     if wayToAdd and not(wayToAdd in waymemberslist[depth:]):
-        if objectToGetNameForRoleFrom and \
-           objectToGetNameForRoleFrom.get('name'): 
+        if isinstance(objectToGetNameForRoleFrom, type('str')):
+            name = objectToGetNameForRoleFrom
+        elif objectToGetNameForRoleFrom and objectToGetNameForRoleFrom.get('name'): 
             name = objectToGetNameForRoleFrom.get('name')
+        print pos, offset, name
+        if offset:
+            role = str(pos+1) + str(offset) + ' ' + name
         else:
-            name = ''
-        print pos, name
-        newMember = RelationMember(str(pos+1) + ' ' + name,wayToAdd)
-        newRelation.addMember(pos, newMember)
+            role = str(pos+1) + ' ' + name
+        newMember = RelationMember(role,wayToAdd)
+        position = pos + offset
+        if position < 0: position = 0
+        newRelation.addMember(position, newMember)
         waymemberslist.append(wayToAdd)
         pos+=1
         return pos, True
@@ -342,6 +349,7 @@ def checkPTroute(route, aDownloadWasNeeded):
     waymemberslist = []
     modified = False
     i=0; newRelation = Relation(route); commandsList = []; previousway = None; skip = 0
+    previousWaysSequence = []
 
     for member in route.getMembers():
         """Algorithm:
@@ -366,24 +374,26 @@ def checkPTroute(route, aDownloadWasNeeded):
             # Main.main.getEditLayer().data.setSelected(comparableRoute)
             # print 'stopsSequence', stopsSequence
             #Main.main.getEditLayer().data.setSelected(stopsSequence)
+            rc1 = rc2 = None
             if comparableRoute:
                 waysSequence = getSequenceOfWays(stopsSequence, route, comparableRoute)
                 for way in waysSequence:
-                    i,rc =addWayToRoute(way, newRelation, i, comparableRoute, waymemberslist)
-                    if rc:
+                    i,rc1 =addWayToRoute(way, newRelation, i, 0, comparableRoute, waymemberslist)
+                    if rc1:
                         skip = len(stopsSequence); modified = True
+                previousWaysSequence = waysSequence
             way = findWayNextToNode(node, route, member)
-            if way:
-                i,rc =addWayToRoute(way, newRelation, i, node, waymemberslist)
-                if i:
-                    modified = True
-                    # We found a way and added it to the relation, but is this way connected to the previous way we found?
-                    if len(waymemberslist)>2 and \
+            if way and not way in previousWaysSequence:
+                i,rc2 =addWayToRoute(way, newRelation, i, -1, node, waymemberslist)
+                if rc2: modified = True
+            # We found a way and added it to the relation, but is this way connected to the previous way we found?
+            if (rc1 or rc2) and \
+                            len(waymemberslist)>2 and \
                             not(areThese2WaysConnected(waymemberslist[-1], waymemberslist[-2])):
-                        connectingWay=findConnectingWay(waymemberslist[-2],waymemberslist[-1])
-                        i,rc =addWayToRoute(connectingWay, newRelation, i, None, waymemberslist)
-                    else:
-                        print 'ALREADY CONNECTED TO PREVIOUS WAY                    !!!!!!!!!!'
+                connectingWay=findConnectingWay(waymemberslist[-2],waymemberslist[-1])
+                i,rc = addWayToRoute(connectingWay, newRelation, i, -1, 'connection', waymemberslist)
+            else:
+                print 'ALREADY CONNECTED TO PREVIOUS WAY                    !!!!!!!!!!'
         
     if modified:
         commandsList.append(Command.ChangeCommand(route, newRelation))

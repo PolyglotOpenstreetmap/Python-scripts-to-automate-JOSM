@@ -1,4 +1,5 @@
 #!/bin/jython
+
 '''
 FindWaysBelongingToRoutesStartingFromStops.jy
 - Given a list of stops, find all ways belonging to the route
@@ -67,11 +68,14 @@ def getMapView():
         return None
 
 def getEndNodes(way):
+    if not(way.getType()) == dummyWay.getType(): return None
     allNodes = way.getNodes()
+    # print 'All nodes', allNodes
     if way.get('junction')=='roundabout':
         return allNodes
     else:
         length = len(allNodes)
+        # print length
         if length < 1:
             if JOptionPane.showInputDialog('enter q to check this way, it has no nodes', '') == 'q':
                 Main.main.getEditLayer().data.setSelected([way])
@@ -83,34 +87,73 @@ def getEndNodes(way):
                 AutoScaleAction.zoomToSelection()
                 quit
             else:
-                return [way.getNode(0)]
+                return way.getNodes()
         else:
             return [way.getNode(0),way.getNode(length-1)]
-    
-def isWaySuitable(way, sideway):
-    '''Is sideway even a way? Is it different from way? Can a bus use it?'''
-    '''TODO: check if it's a dead end'''
-    if sideway.getType() == dummyWay.getType() and\
-                           not(way == sideway) and\
-                           'highway' in way.getKeys() and\
-                           way.get('highway') in suitableWaysForBus:
+         
+def isWaySuitable(way, startingNode = None, checkDeadEnd = True, checkOneWay = True):
+    if not(way.getType() == dummyWay.getType()): return False
+    endNodes = getEndNodes(way)
+    if checkDeadEnd:
+        '''check if it's a dead end street'''
+        if way.isIncomplete() or way.get('noexit') == 'yes':
+            '''if it's not completely downloaded, we don't want to consider it'''
+            '''deprecated way of tagging dead end streets'''
+            return False
+        for endNode in endNodes:
+            if endNode == startingNode:
+                continue
+            if endNode.get('highway') == 'bus_stop':
+                break
+            if endNode.get('noexit') == 'yes':
+                return False
+            '''are there suitable parent ways?'''
+            noParentWaysFound = True
+            for parentWayOfOppositeEndNode in endNode.getReferrers():
+                if isWaySuitable(parentWayOfOppositeEndNode, endNode, checkDeadEnd = False, checkOneWay = False):
+                    noParentWaysFound = False
+                    break
+            if noParentWaysFound: return False
+    if startingNode and checkOneWay:
+        oneWay = way.get('oneway')
+        if oneWay in ['yes', 'true', '1']: oneWay = True; reversed = False
+        elif oneWay in ['-1']: oneWay = True; reversed = True
+        else: oneWay = False
+        if oneWay:
+            if reversed:
+                if startingNode != endNodes[-1]: return False
+            else:
+                if startingNode != endNodes[0]: return False
+                  
+    if 'highway' in way.getKeys() and\
+                    way.get('highway') in suitableWaysForBus:
         return True
     return False
 
 def areThese2WaysConnected(way1,way2):
+    if not(way1.getType() == way2.getType() == dummyWay.getType()): return False
     for endnode in getEndNodes(way1):
         if endnode in getEndNodes(way2):
-            return True
+            return endnode
     return False
-    
+
+def isSideWaySuitable(way, sideway):
+    if not(way == sideway):
+        commonNode = areThese2WaysConnected(way, sideway)
+        if commonNode: return isWaySuitable(sideway, commonNode)
+    return False
+
 checkedWays = {}
 
-def extendEdge(way, result = []):
-    print way
-    print result
+def extendEdge(ways, result = []):
+    return ways
+    # TODO rewrite this function
+    # print way
+    # print result
     # if JOptionPane.showInputDialog('check', '') == 'q':
         # quit
-    if way in checkedWays: return result
+    for way in ways:
+        if way in checkedWays: return result
     checkedWays[way] = None
     if not(result): result = [way]
     endnodes = getEndNodes(way)
@@ -124,7 +167,7 @@ def extendEdge(way, result = []):
                     return result
     suitableSideWays = 0
     for sideway in endnodes[0].getReferrers():
-        if isWaySuitable(way, sideway):
+        if isSideWaySuitable(way, sideway):
             suitableSideWays += 1
             if suitableSideWays > 1:
                 print 'More than 1 branch'
@@ -134,7 +177,7 @@ def extendEdge(way, result = []):
                 if not(new == result): result.insert(0,new[0])
     suitableSideWays = 0
     for sideway in endnodes[1].getReferrers():
-        if isWaySuitable(way, sideway):
+        if isSideWaySuitable(way, sideway):
             suitableSideWays += 1
             if suitableSideWays > 1:
                 print 'More than 1 branch'
@@ -146,51 +189,58 @@ def extendEdge(way, result = []):
 
 def findConnectingWay(way1,way2):
     '''If there is only one way in between these 2 ways, return it'''
-    solution = None
+    solution = None; way2EndNodes = getEndNodes(way2)
     for endnode in getEndNodes(way1):
         parentways=endnode.getReferrers()
         for parentway in parentways:
-            if parentway.getType()==dummyWay.getType():
-                if parentway.get('junction')=='roundabout':
-                    endnodeInParentWays=parentway.getNodes()
-                else:
-                    endnodeInParentWays = [parentway.getNode(0),parentway.getNode(len(parentway.getNodes())-1)]
+            if isSideWaySuitable(way1, parentway):
+                endnodeInParentWays=getEndNodes(parentway)
                 for endnodeInParentWay in endnodeInParentWays:
-                    if endnodeInParentWay in getEndNodes(way2):
+                    if endnodeInParentWay in way2EndNodes:
                         solution = parentway
                         break
-                if not(solution) and  way1.get('name') == way2.get('name') and \
+                if not(solution) and way1.get('name') == way2.get('name') and \
                                  parentway.get('name') == way1.get('name'):  solution = parentway
     return solution
     
 waysNextToPlatform = {}
 platformsNextToWay = {}
 
-def findWayNextToNode(node, route, member):
+def findWaysPassingByPlatformNode(node, route, member):
     found = False
     '''Did we do this already?'''
-    if node.getUniqueId() in waysNextToPlatform: return waysNextToPlatform[node.getUniqueId()]
+    nodeId = node.getUniqueId()
+    if nodeId in waysNextToPlatform: return waysNextToPlatform[nodeId]
     '''First try to use a stop_area relation'''
+    stop_positions = []; platforms = []
     for parentRelationOfNode in node.getReferrers():
-        if found: break
+        if found: return waysNextToPlatform[nodeId]
         if parentRelationOfNode.getType() == dummyRelation.getType():
-            if parentRelationOfNode.get('type') and parentRelationOfNode.get('type') in ('public_transport'):
-                if parentRelationOfNode.get('public_transport') in ('stop_area','stop_position'):
-                    for member in parentRelationOfNode.getMembers(): # now we are sure it's the correct kind of relation, drill down to find parent way of stop_position node
-                        if found: break
-                        if member.isNode():
-                            stopPositionNodeCandidate=member.getNode()
-                            if stopPositionNodeCandidate.get('public_transport') in ['stop_position']:
-                                for parentWayCandidate in stopPositionNodeCandidate.getReferrers():
-                                    if parentWayCandidate.getType() == dummyWay.getType():
-                                        print 'connected through stop_area: '
-                                        waysNextToPlatform[node.getUniqueId()] = parentWayCandidate
-                                        platformsNextToWay.setdefault(parentWayCandidate.getUniqueId(), []).append(node)
-                                        return parentWayCandidate
-                                        found = True
-                                        break
-    '''Next try to find a way nearby, preferably with a stop_position node'''
-    if not(found):
+           if parentRelationOfNode.get('type') in ('public_transport') and \
+              parentRelationOfNode.get('public_transport') in ('stop_area','stop_position'):
+                for member in parentRelationOfNode.getMembers(): # now we are sure it's the correct kind of relation, drill down to find parent way of stop_position node
+                    if member.isNode():
+                        memberNode=member.getNode()
+                        if memberNode.get('public_transport') in ['stop_position']:
+                            stop_positions.append(memberNode)
+                        if memberNode.get('public_transport') in ['platform']:
+                            platforms.append(memberNode)
+                # print 'sp: '
+                # print stop_positions
+                # print platforms
+                # quit
+                for sp in stop_positions:
+                    for parentWayCandidate in sp.getReferrers():
+                        if isWaySuitable(parentWayCandidate, sp):
+                            print 'connected through stop_area: '
+                            waysNextToPlatform.setdefault(node, []).append(parentWayCandidate)
+                            for pf in platforms:
+                                platformsNextToWay.setdefault(parentWayCandidate.getUniqueId(), []).append(pf)
+
+    if nodeId in waysNextToPlatform:
+        return waysNextToPlatform[nodeId]
+        '''If there is no stop_area relation, try to find a way nearby, preferably with a stop_position node'''
+    else:
         # We couldn't determine the way by means of the stop_area relation
         bboxCalculator = BoundingXYVisitor()
         bboxCalculator.computeBoundingBox([node])
@@ -201,40 +251,40 @@ def findWayNextToNode(node, route, member):
         ignorelist = [node]
         stopPosition = Node()
         for i in range(1,20):
-            candidates = mv.getAllNearest(mv.getPoint(node),ignorelist,Way().wayPredicate)
-            if candidates:
-                nodecandidates = mv.getAllNearest(mv.getPoint(node),[],Node().nodePredicate)
+            candidateWays = mv.getAllNearest(mv.getPoint(node),ignorelist,Way().wayPredicate)
+            if candidateWays:
+                candidateNodes = mv.getAllNearest(mv.getPoint(node),[],Node().nodePredicate)
                 foundStopPosition = False
-                for nodecandidate in nodecandidates:
+                for candidateNode in candidateNodes:
                     # is there a stop_position node in the candidates?
-                    if nodecandidate.get('public_transport') in ['stop_position']:
-                        stopPosition = nodecandidate
-                        ignorelist.append(nodecandidate)
+                    if candidateNode.get('public_transport') in ['stop_position']:
+                        stopPosition = candidateNode
+                        ignorelist.append(candidateNode)
                         foundStopPosition = True
                         break
-                for candidate in candidates:
-                    if not(candidate.get('highway')): continue
-                    elif candidate.get('highway') in ['primary', 'secondary',
-                                                      'tertiary', 'unclassified',
-                                                      'residential', 'service',
-                                                      'living_street', 'trunk']:
+                for candidateWay in candidateWays:
+                    if not(candidateWay.get('highway')): continue
+                    elif isWaySuitable(candidateWay):
                         if foundStopPosition:
-                            #if not(member==route.getMember(0)) and candidate.getNode(0)==stopPosition:
-                            #    '''there is probably a better candidate which has this way as its end node, instead of as the starting node'''
-                            #    continue
-                            if not(stopPosition in candidate.getNodes()):
+                            if not(stopPosition in candidateWay.getNodes()):
                                 '''A stop position node was found, but this candidate way doesn't contain it'''
                                 continue
+                            elif stopPosition in getEndNodes(candidateWay):
+                               waysNextToPlatform.setdefault(node, []).append(candidateWay)
                         print 'using '
-                        print candidate.getKeys()
-                        waysNextToPlatform[node.getUniqueId()] = candidate
-                        platformsNextToWay.setdefault(candidate.getUniqueId(), []).append(node)
-                        return candidate
+                        print candidateWay.getKeys()
+                        waysNextToPlatform[nodeId] = [candidateWay]
+                        platformsNextToWay.setdefault(candidateWay.getUniqueId(), []).append(node)
                     else:
-                        ignorelist.append(candidate)
+                        ignorelist.append(candidateWay)
                         print 'ignoring '
-                        print candidate.getKeys()
-            #if found: break
+                        print candidateWay.getKeys()
+            if nodeId in waysNextToPlatform:
+                if len(waysNextToPlatform[nodeId])==2:
+                    connectionNode = areThese2WaysConnected(waysNextToPlatform[nodeId])
+                    if connectionNode and waysNextToPlatform[nodeId][0].getNode(0) == connectionNode:
+                        waysNextToPlatform[nodeId] = [waysNextToPlatform[nodeId][1], waysNextToPlatform[nodeId][0]]
+                return waysNextToPlatform[nodeId]
             bboxCalculator.enlargeBoundingBox() # zoom out a bit and try again
             if bboxCalculator.getBounds():
                 mv.recalculateCenterScale(bboxCalculator)
@@ -249,15 +299,28 @@ def waysLeadingToNextStop(currentRoute, nextStopNode, previousWay):
         if parentRelationOfWay == currentRoute:
             continue
         else:
+            if parentRelationOfWay.hasIncompleteMembers(): continue
             relationType = parentRelationOfWay.get('type')
             if relationType and relationType == 'route':
                 ptVersion = parentRelationOfWay.get('public_transport:version')
                 print ptVersion, parentRelationOfWay.get('name')
-                if ptVersion and ptVersion == '2':
-                    containsStop = parentRelationOfWay.getMembersFor([nextStopNode])
-                    print containsStop
-                    print nextStopNode
-                    if nextStopNode in containsStop:
+                if not(ptVersion):
+                    continue
+                ptVersion = float(ptVersion)
+                print ptVersion, type(ptVersion)
+                # rc = JOptionPane.showInputDialog(ptVersion,parentRelationOfWay.get('name'))
+                # if rc == 'q':
+                    # quit
+                if not(ptVersion < 2.0):
+                    containsStopMember = parentRelationOfWay.getMembersFor([nextStopNode])
+                    # print containsStopMember
+                    # print nextStopNode
+                    # print containsStopMember.contains(nextStopNode)
+
+                    # rc = JOptionPane.showInputDialog('Route contains stop, PT route version: '+ ptVersion, parentRelationOfWay.get('name'))
+                    # if rc == 'q':
+                        # quit
+                    if containsStopMember:
                         startAdding = False
                         for member in parentRelationOfWay.getMembers():
                             if member.isWay():
@@ -265,50 +328,66 @@ def waysLeadingToNextStop(currentRoute, nextStopNode, previousWay):
                                 if startAdding:
                                     waysToNextStop.append(foundWay)
                                     print 'added', foundWay.get('name'), 'from', parentRelationOfWay.get('name')
-                                if not(nextStopNode.getUniqueId() in waysNextToPlatform): findWayNextToNode(nextStopNode, currentRoute, RelationMember("",Node()))
+                                if not(nextStopNode.getUniqueId() in waysNextToPlatform): findWaysPassingByPlatformNode(nextStopNode, currentRoute, RelationMember("",Node()))
                                 if foundWay in waysNextToPlatform[nextStopNode.getUniqueId()]:
-                                    allDone = True
+                                    allDone = parentRelationOfWay
                                     break
                                 if foundWay == previousWay:
                                     startAdding = True
                                     continue
-                        JOptionPane.showInputDialog('Route contains stop, PT route version: '+ ptVersion, parentRelationOfWay.get('name'))
-    return parentRelationOfWay, waysToNextStop
+                        # JOptionPane.showInputDialog('Route contains stop, PT route version: '+ ptVersion, parentRelationOfWay.get('name'))
+    return allDone, waysToNextStop
+
+def buildSequenceOfNextStops(route, node):
+    nextStops = ''
+    relationType = route.get('type')
+    if relationType and relationType == 'route':
+        startAdding = False
+        for member in route.getMembers():
+            if member.isNode():
+                foundNode = member.getNode()
+                if foundNode == node: startAdding = True        
+                if startAdding: nextStops += str(foundNode.getUniqueId()) + ';'
+    return nextStops[:-1]
+
     
-def FindRouteRelationWithTheLongestSequenceOfStopsInCommon(route, node):
-    '''First find our own parent route and build up a sequence of stops which follow our stop node'''
-    nextStops = ''; foundOurOwnParent = False
+def findRouteRelationWithTheLongestSequenceOfStopsInCommon(route, node):
+    '''First find our own parent route and build up a sequence of stops which follow after our stop node'''
+    foundOurOwnParent = False
     for parentRelationOfNode in node.getReferrers():
         if parentRelationOfNode == route:
             foundOurOwnParent = True
-            relationType = parentRelationOfNode.get('type')
-            if relationType and relationType == 'route':
-                ptVersion = parentRelationOfNode.get('public_transport:version')
-                print ptVersion, parentRelationOfNode.get('name')
-                # JOptionPane.showInputDialog('PT route version: '+ ptVersion, parentRelationOfNode.get('name'))
-                if ptVersion and ptVersion == '2':
-                    startAdding = False
-                    for member in parentRelationOfNode.getMembers():
-                        if member.isNode():
-                            foundNode = member.getNode()
-                            if foundNode == node: startAdding = True        
-                            if startAdding: nextStops += str(foundNode.getUniqueId()) + ';'        
-        else:
-            continue
+            nextStops = buildSequenceOfNextStops(route, node)
+    # JOptionPane.showInputDialog('Next stops: '+ str(foundOurOwnParent), nextStops)
     if not(foundOurOwnParent):
         print 'This node is not a member of that route relation'
         return None, None
     if not(nextStops):
         print 'No further stops found'
         return None, []
-    '''Now we have a list to compare with, let's look for another route 
+    '''Now that we have a list to compare with, let's look for another route 
     which has the same sequence of stops'''
     overviewOfCommonStops = {}; longest = 0; routeWithLongestSequence = None
+    goodCandidateParentRoutes = []
     for parentRelationOfNode in node.getReferrers():
+        if parentRelationOfNode.getId() in goodCandidateParentRoutes:
+            rc = JOptionPane.showInputDialog(str(parentRelationOfNode.getId()),'processing')
+            if rc == 'q':
+                quit
         stopsInCommon = ''; stopsInCommonList = []
         if parentRelationOfNode.getType() == route.getType():
+            if parentRelationOfNode.hasIncompleteMembers(): continue
             relationType = parentRelationOfNode.get('type')
             if relationType and relationType == 'route':
+                ptVersion = parentRelationOfNode.get('public_transport:version')
+                if not(ptVersion):
+                    continue
+                ptVersion = float(ptVersion)
+                # rc = JOptionPane.showInputDialog(ptVersion,parentRelationOfNode.get('name'))
+                # if rc == 'q':
+                    # quit
+                if ptVersion < 2.0:
+                    continue
                 foundNoWaysInRoute = True
                 for member in parentRelationOfNode.getMembers():
                     '''Does the other relation already contain ways?'''
@@ -316,6 +395,7 @@ def FindRouteRelationWithTheLongestSequenceOfStopsInCommon(route, node):
                         foundNoWaysInRoute = False; break
                 if foundNoWaysInRoute:
                     continue
+
                 startComparing = False
                 firstNextStop = nextStops.split(';')[0]; firstNewStopInCommon = None
                 for member in parentRelationOfNode.getMembers():
@@ -324,69 +404,88 @@ def FindRouteRelationWithTheLongestSequenceOfStopsInCommon(route, node):
                         if foundNode == node:
                             startComparing = True
                         if startComparing:
-                            newStopsInCommon = stopsInCommon + str(foundNode.getUniqueId()) + ';'
                             if not(firstNewStopInCommon):
-                                firstNewStopInCommon = newStopsInCommon.split(';')[0]
-                            print firstNewStopInCommon
-                            print firstNextStop
-                            if firstNewStopInCommon and \
-                                  firstNewStopInCommon == firstNextStop and \
-                                  stopsInCommon in nextStops:
-                                print 'Keep building up the list'
+                                firstNewStopInCommon = str(foundNode.getUniqueId())
+                                newStopsInCommon = firstNewStopInCommon + ';'
+                            else:
+                                newStopsInCommon = stopsInCommon + str(foundNode.getUniqueId()) + ';'
+                            if firstNewStopInCommon == firstNextStop and \
+                                      newStopsInCommon in nextStops:
+                                # print 'Keep building up the list'
                                 stopsInCommon = newStopsInCommon
                                 stopsInCommonList.append(foundNode)
-                                print foundNode.get('name')
+                                # print 'Adding', foundNode.get('name'), 'to the list'
                             else:
                                 print 'Done'
+                                # print nextStops
+                                # print stopsInCommon
+                                # for platform in stopsInCommonList:
+                                    # print platform.get('name')
                                 
-                                overviewOfCommonStops[parentRelationOfNode.getUniqueId()] = stopsInCommonList[:-1]
+                                overviewOfCommonStops[parentRelationOfNode.getUniqueId()] = stopsInCommonList
                                 length = len(overviewOfCommonStops[parentRelationOfNode.getUniqueId()])
                                 print length, longest
+                                # if parentRelationOfNode.getId() in goodCandidateParentRoutes:
+                                # rc = JOptionPane.showInputDialog(str(parentRelationOfNode.getId()), 'got this far ' + str(length) +'/'+ str(longest))
+                                # if rc == 'q':
+                                    # quit
+                                if parentRelationOfNode.getId() in goodCandidateParentRoutes:
+                                    rc = JOptionPane.showInputDialog(str(parentRelationOfNode.getId()) + ' ' + str(length),str(longest))
+                                    if rc == 'q':
+                                        quit
                                 if length > longest:
                                     longest = length
                                     routeWithLongestSequence = parentRelationOfNode
                                     print 'longer one found'
                                 break
-    print 'overviewOfCommonStops', overviewOfCommonStops
+    # print 'overviewOfCommonStops', overviewOfCommonStops
     if longest:
+        # rc = JOptionPane.showInputDialog('chosen: ' + str(routeWithLongestSequence.getId()),str(longest))
+        # if rc == 'q':
+            # quit
         return routeWithLongestSequence, overviewOfCommonStops[routeWithLongestSequence.getUniqueId()]
     else:
         '''No other parent route has a sequence of stops in common'''
         return None, None
+        
+sideWayAlreadyChecked = {}
+        
+def sideWays(way):
+    result = []
+    for node in getEndNodes(way):
+        for sideWay in node.getReferrers():
+            if sideWay not in sideWayAlreadyChecked and isSideWaySuitable(way, sideWay):
+                sideWayAlreadyChecked[sideWay] = None
+                result.append(sideWay)
+    return result
 
 def getSequenceOfWays(stopsSequence, route, comparableRoute):
     adjacentWays = {}; startFrom = 0
-    print 'stopsSequence', stopsSequence
-    comparableRouteMembers = comparableRoute.getMembers()
+    # print 'stopsSequence', stopsSequence
     for platformNode in stopsSequence:
         print platformNode.get('name')
         # Main.main.getEditLayer().data.setSelected(comparableRoute)
-        way = findWayNextToNode(platformNode, route, RelationMember("",Node()))
-        # print 'way', way
+        ways = findWaysPassingByPlatformNode(platformNode, route, RelationMember("",Node()))
+        # Main.main.getEditLayer().data.setSelected(ways)
+        # quit
+        # print 'way', ways
         # print 'route', route
-        if way:
-            # print comparableRouteMembers
+        if ways:
             index = 0
-            for member in comparableRouteMembers:
+            for member in comparableRoute.getMembers():
                 index += 1
                 if index < startFrom: continue
                 if member.isWay():
                     memberWay = member.getWay()
-                    print index, memberWay == way #, 'memberWay', memberWay
-                    if memberWay == way:
+                    # print 'memberWay', memberWay
+
+                    # rc = JOptionPane.showInputDialog('','')
+                    # if rc == 'q':
+                        # quit
+                    if memberWay in ways: # memberWay in sideWays(way) or 
                         platformNodeId = platformNode.getUniqueId()
-                        # print platformNodeId
-                        # print adjacentWays.keys()
-                        # if platformNodeId in adjacentWays:
-                            # '''There are routes which pass by the same stop more than once'''
-                            # print "shouldn't normally get here"
-                            # JOptionPane.showInputDialog("shouldn't normally get here", None)
-                            # adjacentWays[platformNodeId] = adjacentWays[platformNodeId].append([index, memberWay])
-                        # else:
                         adjacentWays[platformNodeId] = [[index, memberWay]]
                         startFrom = index
-                else:
-                    continue
     for nodeId in adjacentWays:
         if adjacentWays[nodeId]: print len(adjacentWays[nodeId]), nodeId, adjacentWays[nodeId][0]
         else: print '*', nodeId, adjacentWays[nodeId]
@@ -419,30 +518,46 @@ def getSequenceOfWays(stopsSequence, route, comparableRoute):
             if member.isWay(): waysSequence.append(member.getMember())
     return waysSequence
     
-def addWayToRoute(wayToAdd, newRelation, pos, offset, objectToGetNameForRoleFrom, waymemberslist):
+def addWayToRoute(wayToAdd, newRelation, pos, offset, nameForRole, waymemberslist):
     depth = len(waymemberslist)
     if depth > 3: depth = -3
     else: depth = -1 * depth
     if wayToAdd and not(wayToAdd in waymemberslist[depth:]):
-        if isinstance(objectToGetNameForRoleFrom, type('str')):
-            name = objectToGetNameForRoleFrom
-        elif objectToGetNameForRoleFrom and objectToGetNameForRoleFrom.get('name'): 
-            name = objectToGetNameForRoleFrom.get('name')
-        else:
-            name = ''
-        print pos, offset, name
+        print pos, offset, nameForRole
         if offset:
-            role = str(pos+1) + str(offset) + ' ' + name
+            role = str(pos+1) + str(offset) + ' ' + nameForRole
         else:
-            role = str(pos+1) + ' ' + name
+            role = str(pos+1) + ' ' + nameForRole
         newMember = RelationMember(role,wayToAdd)
         position = pos + offset
         if position < 0: position = 0
+        print len(newRelation.getMembers()), pos
+        # max = len(newRelation.getMembers())
+        # if position > max: pos = position = max
         newRelation.addMember(position, newMember)
         waymemberslist.append(wayToAdd)
         pos+=1
         return pos, True
     return pos, None
+    
+def addWaysToRoute(waysToAdd, newRelation, pos, offset, nameForRole, waymemberslist):
+    rc = None
+    # newRelation.removeMembersFor(waysToAdd)
+    # waysToAddShadow = waysToAdd
+    # i=0
+    # for member in newRelation.getMembers():
+        # if member.isWay():
+            # way = member.getWay()
+            # if member.getRole() == '' and way in waysToAddShadow:
+                # newRelation.removeMember(i)
+                # waysToAddShadow.remove(way)
+        # print i, waysToAddShadow
+        # if waysToAddShadow == []: break
+        # i+=1
+    if waysToAdd:
+        for way in waysToAdd:
+            pos, rc = addWayToRoute(way, newRelation, pos, offset, nameForRole, waymemberslist)
+    return pos, rc
 
 def transposeRouteRelation(existingRoute, routeWithNewInformation):
     commandsList = []
@@ -505,49 +620,68 @@ def checkPTroute(route, aDownloadWasNeeded):
         if member.isNode():
             node = member.getNode()
             print node.get('name')
-            comparableRoute, stopsSequence = FindRouteRelationWithTheLongestSequenceOfStopsInCommon(route, node)
+            comparableRoute, stopsSequence = findRouteRelationWithTheLongestSequenceOfStopsInCommon(route, node)
             # for stop in stopsSequence: print stop.get('name')
             # quit
             # print 'comparableRoute', comparableRoute
             # Main.main.getEditLayer().data.setSelected(comparableRoute)
+            # quit
             # print 'stopsSequence', stopsSequence
             #Main.main.getEditLayer().data.setSelected(stopsSequence)
             rc1 = rc2 = None
+            notSolved = True
             if comparableRoute:
+                '''Best solution is to copy from another relation containing the same sequence of stops and hence normally a correct sequence of ways'''
                 waysSequence = getSequenceOfWays(stopsSequence, route, comparableRoute)
+                
                 if len(waysSequence)>1:
-                    for way in waysSequence:
-                        if way in waysAlreadyInRoute:
-
-                            newRelation.removeMembersFor([way])
-                        i,rc1 =addWayToRoute(way, newRelation, i, 0, comparableRoute, waymemberslist)
-                        if rc1:
-                            skip = len(stopsSequence)-1; modified = True
+                    i,rc1 =addWaysToRoute(waysSequence, newRelation, i, 0, comparableRoute.get('name'), waymemberslist)
+                    if rc1:
+                        skip = len(stopsSequence)-1; modified = True
+                        notSolved = False
                     previousWaysSequence = waysSequence
                     allWaysInRoute += waysSequence
                 else:
                     previousWaysSequence = []
-            else:
+            if notSolved and allWaysInRoute:
+                '''second best is to use the ways of another route, which have our last way and the next stop in common'''
+                # print allWaysInRoute
+                # print allWaysInRoute[-1]
                 comparableRoute, waysSequence = waysLeadingToNextStop(route, node, allWaysInRoute[-1])
-                for way in waysSequence:
-                    if way in waysAlreadyInRoute:
-                        newRelation.removeMembersFor([way])
-                    i,rc1 =addWayToRoute(way, newRelation, i, 0, comparableRoute, waymemberslist)
+                if comparableRoute:
+                    # print waysSequence
+                    i,rc1 =addWaysToRoute(waysSequence, newRelation, i, 0, '*'+comparableRoute.get('name'), waymemberslist)
                     if rc1:
-                        skip = 1; modified = True
-                previousWaysSequence = waysSequence
-                allWaysInRoute += waysSequence
-            way = findWayNextToNode(node, route, member)
-            if way and not way in allWaysInRoute:
-                edge = extendEdge(way)
-                for way in edge:
-                    if way and not way in allWaysInRoute:
-                        if way in waysAlreadyInRoute:
-                            # member = RouteMember('', way)
-                            newRelation.removeMembersFor([way])
-                        i,rc2 =addWayToRoute(way, newRelation, i, 0, node, waymemberslist) # len(previousWaysSequence)*-1
-                        if rc2: modified = True
-                        allWaysInRoute.append(way)
+                        skip = 0; modified = True
+                        notSolved = False
+                    previousWaysSequence = waysSequence
+                    allWaysInRoute += waysSequence
+            if notSolved and allWaysInRoute:
+                '''If that doesn't work, try from one of the adjacent ways'''
+                found = False
+                for endNode in getEndNodes(allWaysInRoute[-1]):
+                    print endNode.get('public_transport')
+                    if endNode.get('public_transport') == 'stop_position':
+                        found = True; break
+                    if found:
+                        for way in endNode.getReferrers():
+                            if isSideWaySuitable(allWaysInRoute[-1], way):
+                                comparableRoute, waysSequence = waysLeadingToNextStop(route, node, way)
+                                if comparableRoute:
+                                    i,rc1 =addWaysToRoute(waysSequence, newRelation, i, 0, '+'+comparableRoute.get('name'), waymemberslist)
+                                    if rc1:
+                                        skip = 0; modified = True
+                                        notSolved = False
+                                    previousWaysSequence = waysSequence
+                                    allWaysInRoute += waysSequence
+            if notSolved:
+                '''If all else fails, simply add the nearest suitable way'''
+                ways = findWaysPassingByPlatformNode(node, route, member)
+                if ways:
+                    edge = extendEdge(ways)
+                    i,rc2 =addWaysToRoute(edge, newRelation, i, 0, node.get('name'), waymemberslist) # len(previousWaysSequence)*-1
+                    if rc2: modified = True
+                    allWaysInRoute += ways
             newRelation.put('odbl', 'new'); notFound = True
     i=0; previousWay = None
     for member in newRelation.getMembers():
@@ -595,9 +729,6 @@ the script can run in three modes
    All hierarchies are still checked, looking for more incomplete data for which more downloads need to be scheduled.
 3. Normal run; All data is available and proper reporting can be performed.
 '''
-
-dummy_way = Way()
-dummy_relation = Relation()
 
 mv = getMapView()
 #print dir(mv)

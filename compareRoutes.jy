@@ -1,0 +1,196 @@
+#!/bin/jython
+
+
+'''
+FindWaysBelongingToRoutesStartingFromStops.jy
+- Given a list of stops, find all ways belonging to the route
+
+This code is released under the GNU General
+Public License v2 or later.
+
+The GPL v3 is accessible here:
+http://www.gnu.org/licenses/gpl.html
+
+The GPL v2 is accessible here:
+http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+It comes with no warranty whatsoever.
+
+'''
+from javax.swing import JOptionPane
+from types import *
+from org.openstreetmap.josm import Main
+import org.openstreetmap.josm.command as Command
+import org.openstreetmap.josm.data.osm.Node as Node
+import org.openstreetmap.josm.data.osm.Way as Way
+import org.openstreetmap.josm.data.osm.Relation as Relation
+import org.openstreetmap.josm.data.Bounds as Bounds
+import org.openstreetmap.josm.data.osm.visitor.BoundingXYVisitor as BoundingXYVisitor
+import org.openstreetmap.josm.data.osm.TagCollection as TagCollection
+import org.openstreetmap.josm.data.osm.DataSet as DataSet
+import org.openstreetmap.josm.data.osm.RelationMember as RelationMember
+import org.openstreetmap.josm.gui.dialogs.relation.DownloadRelationMemberTask as DownloadRelationMemberTask
+import org.openstreetmap.josm.actions.DownloadReferrersAction as DownloadReferrersAction
+import org.openstreetmap.josm.actions.search.SearchAction as SearchAction
+import re, time
+import codecs
+import org.openstreetmap.josm.gui.dialogs.relation.RelationDialogManager as RelationDialogManager
+import org.openstreetmap.josm.gui.dialogs.relation.RelationEditor as RelationEditor
+import org.openstreetmap.josm.actions.AutoScaleAction as AutoScaleAction
+
+dummyRelation = Relation(); dummyWay = Way()
+
+print
+print "=========================="
+print 
+
+sideEffects = {
+    'addWayToRoute': None,
+    }
+
+logVerbosity = 30
+'''
+10: only report problems that require attention
+20: report on collection
+30: report on network nodes
+40: report on which routes are being checked
+50: report everything
+'''
+
+dummy_way = Way()
+dummy_relation = Relation()
+
+def getMapView():
+    if Main.main and Main.main.map:
+        return Main.main.map.mapView
+    else:
+        return None
+
+mv = getMapView()
+#print dir(mv)
+
+alphabet = 'a0a1a2a3a4a5a6a7a8a9b0b1b2b3b4b5b6b7b8b9c0c1c2c3c4c5c6c7c8c9d0d1d2d3d4d5d6d7d8d9e0e1e2e3e4e5e6e7e8e9f0f1f2f3f4f5f6f7f8f9g0g1g2g3g4g5g6g7g8g9h0h1h2h3h4h5h6h7h8h9i0i1i2i3i4i5i6i7i8i9j0j1j2j3j4j5j6j7j8j9k0k1k2k3k4k5k6k7k8k9l0l1l2l3l4l5l6l7l8l9m0m1m2m3m4m5m6m7m8m9n0n1n2n3n4n5n6n7n8n9o0o1o2o3o4o5o6o7o8o9p0p1p2p3p4p5p6p7p8p9q0q1q2q3q4q5q6q7q8q9r0r1r2r3r4r5r6r7r8r9s0s1s2s3s4s5s6s7s8s9t0t1t2t3t4t5t6t7t8t9u0u1u2u3u4u5u6u7u8u9v0v1v2v3v4v5v6v7v8v9w0w1w2w3w4w5w6w7w8w9x0x1x2x3x4x5x6x7x8x9y0y1y2y3y4y5y6y7y8y9z0z1z2z3z4z5z6z7z8z9@0@1@2@3@4@5@6@7@8@9#0#1#2#3#4#5#6#7#8#9$0$1$2$3$4$5$6$7$8$9%0%1%2%3%4%5%6%7%8%9&0&1&2&3&4&5&6&7&8&9*0*1*2*3*4*5*6*7*8*9(0(1(2(3(4(5(6(7(8(9)0)1)2)3)4)5)6)7)8)9-0-1-2-3-4-5-6-7-8-9_0_1_2_3_4_5_6_7_8_9+0+1+2+3+4+5+6+7+8+9=0=1=2=3=4=5=6=7=8=9[0[1[2[3[4[5[6[7[8[9\0\1\2\3\4\5\6\7\8\9/0/1/2/3/4/5/6/7/8/9!0!1!2!3!4!5!6!7!8!9.0.1.2.3.4.5.6.7.8.9:0:1:2:3:4:5:6:7:8:9"0"1"2"3"4"5"6"7"8"9'
+relationsDict = {}
+stopRefs = {}
+platformEncodedAs = {}
+maxEncIndex = 0
+
+if mv and mv.editLayer and mv.editLayer.data:
+    commandsList = []
+    groupRelation = Relation()
+    workWithExistingRelation = False
+    selectedRelations = mv.editLayer.data.getSelectedRelations()
+    if not(selectedRelations):
+        SearchAction.search('type:relation type=route tttttt',SearchAction.SearchMode.fromCode('R'))
+        selectedRelations = mv.editLayer.data.getSelectedRelations()
+        if not(selectedRelations):
+            JOptionPane.showMessageDialog(Main.parent, "Please select a group of route relations to compare and match")
+        else:
+            ready = False
+            for newRouteRelation in selectedRelations:
+                if ready: break
+                rtags = newRouteRelation.getKeys()
+                if 'type' in rtags and rtags['type'] == 'route':
+                    for routeMaster in newRouteRelation.getReferrers():
+                        mtags = routeMaster.getKeys()
+                        if 'type' in mtags and mtags['type'] == 'route_master':
+                            mref = None
+                            if 'ref:De_Lijn' in mtags:
+                                mref = mtags['ref:De_Lijn']
+                                search = '"ref:De_Lijn"=' + mref
+                            elif 'ref:TEC' in mtags:
+                                mref = mtags['ref:TEC']
+                                search = '"ref:TEC="' + mref
+                            if mref:
+                                SearchAction.search('type:relation type=route_master -new ' + search,SearchAction.SearchMode.fromCode('R'))
+                                selectedRelations = mv.editLayer.data.getSelectedRelations()
+                                if not(selectedRelations):
+                                    JOptionPane.showMessageDialog(Main.parent, "No route_master present for these routes yet")
+                                    selectedRelations = routeMaster.getMembers()
+                                elif len(selectedRelations)>1:
+                                    JOptionPane.showMessageDialog(Main.parent, "More than 1 route_master exists already")
+                                    selectedRelations = None                               
+                                else:
+                                    ourNewMasterRelation = routeMaster
+                                    groupRelation = Relation(ourNewMasterRelation)
+                                    for s in selectedRelations:
+                                        existingMaster = s
+                                        break
+                                    selectedRelations = []
+                                    workWithExistingRelation = True
+
+                                    for member in ourNewMasterRelation.getMembers():
+                                        selectedRelations.append(member.getMember())
+                                    # selectedRelations.put('created_by') = groupRelation.get('name')
+                                    # selectedRelations.put('network') = groupRelation.get('network')
+                                    groupRelation.put('created_by', 'tttttt')
+                                    i = len(groupRelation.getMembers()) -1
+                                    for existingMember in existingMaster.getMembers():
+                                        groupRelation.addMember(i,existingMember)
+                                        selectedRelations.append(existingMember.getMember())
+                                        i += 1
+                                    ready = True
+                                    break
+               
+    if selectedRelations:
+        for relation in selectedRelations:
+            # print dir(relation)
+            rtags = relation.getKeys()
+            if 'type' in rtags and rtags['type'] == 'route':
+                allstopsrefs = ''
+                for member in relation.getMembers():
+                    if member.isNode():
+                        # print 'a node'
+                        node = member.getNode()
+                        ntags = node.getKeys()
+                        # print ntags
+                        if 'highway' in ntags and ntags['highway'] == 'bus_stop':
+                            # print "it's a bus stop"
+                            platformRefs = (ntags['ref:De_Lijn'] or ntags['ref:TECB'] or  ntags['ref:TECC'] or ntags['ref:TECH'] or ntags['ref:TECN'] or ntags['ref:TECL'] or ntags['ref:TECX']) + ';'
+                            # print platformRefs
+                            if not(platformRefs in platformEncodedAs):
+                                # print "it's the first time we see it"
+                                platformEncodedAs[platformRefs] = alphabet[maxEncIndex:maxEncIndex+2]
+                                maxEncIndex +=2
+                                if maxEncIndex > len(alphabet):
+                                    if JOptionPane.showInputDialog('alphabet string is not long enough', 'q') == 'q':
+                                        quit
+                            # print platformEncodedAs
+                            # if JOptionPane.showInputDialog('enter q to check this way, it has no nodes', '') == 'q':
+                                # Main.main.getEditLayer().data.setSelected([way])
+                                ## AutoScaleAction.zoomToSelection()
+                                # quit
+
+                            # print 'we encode it as:', platformEncodedAs[platformRefs]
+                            allstopsrefs += platformEncodedAs[platformRefs]
+                            # print allstopsrefs
+                relationId = relation.getUniqueId()
+                # allstopsrefs = allstopsrefs[:-1]
+                stopRefs.setdefault(str(len(allstopsrefs)/2).rjust(2, '0')+'|'+allstopsrefs, []).append(relationId)
+                # print stopRefs
+                relationsDict[relationId] = relation
+                
+        # for key in relationsDict.keys():
+            # print key
+        # for key, value in stopRefs.keys():
+        # for key in stopRefs:
+            # print stopRefs[key]
+        i = 0
+        for allstopsrefs in sorted(stopRefs):
+            # print allstopsrefs
+            for relationId in stopRefs[allstopsrefs]:
+                # print relationId
+                relation = relationsDict[relationId]
+                # newRelation = Relation(relation)
+                # newRelation.put('created_by', allstopsrefs)
+                # newRelation.put('odbl:note', )
+                newMember = RelationMember(allstopsrefs, relation)
+                groupRelation.addMember(i,newMember)
+                i+=1
+        if workWithExistingRelation:
+            commandsList.append(Command.ChangeCommand(ourNewMasterRelation, groupRelation))
+        else:
+            commandsList.append(Command.AddCommand(groupRelation))
+        Main.main.undoRedo.add(Command.SequenceCommand("Adding hash of stops sequence", commandsList))
+        commandsList = []
+        Main.main.getEditLayer().data.setSelected(groupRelation)

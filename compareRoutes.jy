@@ -100,7 +100,7 @@ if mv and mv.editLayer and mv.editLayer.data:
                                 search = '"ref:De_Lijn"=' + mref
                             elif 'ref:TEC' in mtags:
                                 mref = mtags['ref:TEC']
-                                search = '"ref:TEC="' + mref
+                                search = '"ref:TEC"=' + mref
                             if mref:
                                 SearchAction.search('type:relation type=route_master -new ' + search,SearchAction.SearchMode.fromCode('R'))
                                 selectedRelations = mv.editLayer.data.getSelectedRelations()
@@ -144,8 +144,9 @@ if mv and mv.editLayer and mv.editLayer.data:
                         node = member.getNode()
                         ntags = node.getKeys()
                         # print ntags
-                        if 'highway' in ntags and ntags['highway'] == 'bus_stop':
-                            # print "it's a bus stop"
+                        if 'highway' in ntags and ntags['highway'] == 'bus_stop' or \
+                           'railway' in ntags and ntags['railway'] == 'tram_stop':
+                            # print "it's a bus/tram stop"
                             platformRefs = (ntags['ref:De_Lijn'] or ntags['ref:TECB'] or  ntags['ref:TECC'] or ntags['ref:TECH'] or ntags['ref:TECN'] or ntags['ref:TECL'] or ntags['ref:TECX']) + ';'
                             # print platformRefs
                             if not(platformRefs in platformEncodedAs):

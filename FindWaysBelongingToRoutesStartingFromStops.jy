@@ -56,10 +56,12 @@ logVerbosity = 30
 50: report everything
 '''
 
-suitableWaysForBus =  ['primary', 'secondary',
-                      'tertiary', 'unclassified',
-                      'residential', 'service',
-                      'living_street', 'trunk']
+suitableWaysFor =  {'bus':  {'highway':['primary', 'secondary',
+                                        'tertiary', 'unclassified',
+                                        'residential', 'service',
+                                        'living_street', 'trunk']},
+                    'tram': {'railway':['tram']}
+                    }
 
 def getMapView():
     if Main.main and Main.main.map:
@@ -91,7 +93,7 @@ def getEndNodes(way):
         else:
             return [way.getNode(0),way.getNode(length-1)]
          
-def isWaySuitable(way, startingNode = None, checkDeadEnd = True, checkOneWay = True):
+def isWaySuitable(way, startingNode = None, checkDeadEnd = True, checkOneWay = True,modeOfTransport = 'bus'):
     if not(way.getType() == dummyWay.getType()): return False
     endNodes = getEndNodes(way)
     if checkDeadEnd:
@@ -110,7 +112,7 @@ def isWaySuitable(way, startingNode = None, checkDeadEnd = True, checkOneWay = T
             '''are there suitable parent ways?'''
             noParentWaysFound = True
             for parentWayOfOppositeEndNode in endNode.getReferrers():
-                if isWaySuitable(parentWayOfOppositeEndNode, endNode, checkDeadEnd = False, checkOneWay = False):
+                if isWaySuitable(parentWayOfOppositeEndNode, endNode, checkDeadEnd = False, checkOneWay = False, modeOfTransport = modeOfTransport):
                     noParentWaysFound = False
                     break
             if noParentWaysFound: return False
@@ -129,10 +131,13 @@ def isWaySuitable(way, startingNode = None, checkDeadEnd = True, checkOneWay = T
                 if startingNode != endNodes[-1]: return False
             else:
                 if startingNode != endNodes[0]: return False
-                  
-    if 'highway' in way.getKeys() and\
-                    way.get('highway') in suitableWaysForBus:
-        return True
+    print suitableWaysFor[modeOfTransport]
+    for typeOfWay, goodTypes in suitableWaysFor[modeOfTransport].iteritems():
+        print typeOfWay, goodTypes
+        
+        if typeOfWay in way.getKeys() and\
+                    way.get(typeOfWay) in goodTypes:
+            return True
     return False
 
 def areThese2WaysConnected(way1,way2):
@@ -142,10 +147,10 @@ def areThese2WaysConnected(way1,way2):
             return endnode
     return False
 
-def isSideWaySuitable(way, sideway):
+def isSideWaySuitable(way, sideway, modeOfTransport='bus'):
     if not(way == sideway):
         commonNode = areThese2WaysConnected(way, sideway)
-        if commonNode: return isWaySuitable(sideway, commonNode)
+        if commonNode: return isWaySuitable(sideway, commonNode, modeOfTransport=modeOfTransport)
     return False
 
 checkedWays = {}
@@ -215,7 +220,7 @@ stopPositions = {}
 def findWaysPassingByPlatformNode(node, route, member):
     found = False
     '''Did we do this already?'''
-    nodeId = node.getUniqueId()
+    nodeId = node.getUniqueId(); nodelayer = node.get('layer')
     if nodeId in waysNextToPlatform: return waysNextToPlatform[nodeId]
     '''First try to use a stop_area relation'''
     stop_positions = []; platforms = []
@@ -238,7 +243,7 @@ def findWaysPassingByPlatformNode(node, route, member):
                 # quit
                 for sp in stop_positions:
                     for parentWayCandidate in sp.getReferrers():
-                        if isWaySuitable(parentWayCandidate, sp):
+                        if isWaySuitable(parentWayCandidate, sp, modeOfTransport=route.get('route')):
                             print 'connected through stop_area: '
                             waysNextToPlatform.setdefault(node, []).append(parentWayCandidate)
                             for pf in platforms:
@@ -272,8 +277,14 @@ def findWaysPassingByPlatformNode(node, route, member):
                         foundStopPosition = True
                         break
                 for candidateWay in candidateWays:
-                    if not(candidateWay.get('highway')): continue
-                    elif isWaySuitable(candidateWay):
+                    if not(candidateWay.get('highway')):
+                        ignorelist.append(candidateWay)
+                        continue
+                    waylayer = candidateWay.get('layer')
+                    if (nodelayer or waylayer) and not(waylayer == nodelayer):
+                        ignorelist.append(candidateWay)
+                        continue
+                    elif isWaySuitable(candidateWay, modeOfTransport = route.get('route')):
                         if foundStopPosition:
                             if not(stopPosition in candidateWay.getNodes()):
                                 '''A stop position node was found, but this candidate way doesn't contain it'''
@@ -341,7 +352,8 @@ def waysLeadingToNextStop(currentRoute, nextStopNode, previousWay):
                                 print 'added', foundWay.get('name'), 'from', parentRelationOfWay.get('name')
                             if not(nextStopNode.getUniqueId() in waysNextToPlatform):
                                 findWaysPassingByPlatformNode(nextStopNode, currentRoute, RelationMember("",Node()))
-                            if foundWay in waysNextToPlatform[nextStopNode.getUniqueId()]:
+                            if nextStopNode.getUniqueId() in waysNextToPlatform and \
+                                  foundWay in waysNextToPlatform[nextStopNode.getUniqueId()]:
                                 allDone = parentRelationOfWay
                                 break
                             if foundWay == previousWay:
@@ -693,7 +705,7 @@ def checkPTroute(route, aDownloadWasNeeded):
                             not(stopPositions[stopPlatformId] in getEndNodes(waymemberslist[-1])):
                                 edge = []
                                 for lway in ways:
-                                    if not(lway in waymemberslist):
+                                    if not(lway in newRelation.getMembers()):
                                         edge.append(lway)
                     else:
                         edge = extendEdge(ways)

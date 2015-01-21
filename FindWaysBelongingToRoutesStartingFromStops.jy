@@ -45,6 +45,7 @@ print
 
 sideEffects = {
     'addWayToRoute': None,
+    'downloadIncompleteMembers': None,
     }
 
 logVerbosity = 30
@@ -72,6 +73,8 @@ def getMapView():
 def getEndNodes(way):
     if not(way.getType()) == dummyWay.getType(): return None
     allNodes = way.getNodes()
+    # print way
+
     # print 'All nodes', allNodes
     if way.get('junction')=='roundabout':
         return allNodes
@@ -131,9 +134,9 @@ def isWaySuitable(way, startingNode = None, checkDeadEnd = True, checkOneWay = T
                 if startingNode != endNodes[-1]: return False
             else:
                 if startingNode != endNodes[0]: return False
-    print suitableWaysFor[modeOfTransport]
+    # print suitableWaysFor[modeOfTransport]
     for typeOfWay, goodTypes in suitableWaysFor[modeOfTransport].iteritems():
-        print typeOfWay, goodTypes
+        # print typeOfWay, goodTypes
         
         if typeOfWay in way.getKeys() and\
                     way.get(typeOfWay) in goodTypes:
@@ -143,8 +146,10 @@ def isWaySuitable(way, startingNode = None, checkDeadEnd = True, checkOneWay = T
 def areThese2WaysConnected(way1,way2):
     if not(way1.getType() == way2.getType() == dummyWay.getType()): return False
     for endnode in getEndNodes(way1):
-        if endnode in getEndNodes(way2):
-            return endnode
+        if endnode:
+            endNodesWay2 = getEndNodes(way2)
+            if endNodesWay2 and endnode in endNodesWay2:
+                return endnode
     return False
 
 def isSideWaySuitable(way, sideway, modeOfTransport='bus'):
@@ -371,8 +376,7 @@ def buildSequenceOfNextStops(route, node):
                 foundNode = member.getNode()
                 if foundNode == node: startAdding = True        
                 if startAdding: nextStops += str(foundNode.getUniqueId()) + ';'
-    return nextStops[:-1]
-
+    return nextStops
     
 def findRouteRelationWithTheLongestSequenceOfStopsInCommon(route, node):
     '''First find our own parent route and build up a sequence of stops which follow after our stop node'''
@@ -545,15 +549,15 @@ def addWayToRoute(wayToAdd, newRelation, pos, offset, nameForRole, waymemberslis
     return pos, None
     
 def addWaysToRoute(waysToAdd, newRelation, pos, offset, nameForRole, waymemberslist, addOneOfUsFirst):
-    if addOneOfUsFirst:
-        firstWayToAdd = waysToAdd[0]
-        for way in addOneOfUsFirst:
-            connectingNode = areThese2WaysConnected(way, firstWayToAdd)
-            if connectingNode:
-                waysToAdd = [way] + waysToAdd
-                break
     rc = None
     if waysToAdd:
+        if addOneOfUsFirst:
+            firstWayToAdd = waysToAdd[0]
+            for way in addOneOfUsFirst:
+                connectingNode = areThese2WaysConnected(way, firstWayToAdd)
+                if connectingNode:
+                    waysToAdd = [way] + waysToAdd
+                    break
         for way in waysToAdd:
             pos, rc = addWayToRoute(way, newRelation, pos, offset, nameForRole, waymemberslist)
     return pos, rc, waymemberslist + waysToAdd
@@ -663,7 +667,9 @@ def checkPTroute(route, aDownloadWasNeeded):
                 # print allWaysInRoute[-1]
                 comparableRoute, waysSequence = waysLeadingToNextStop(route, stopPlatform, allWaysInRoute[-1])
                 if comparableRoute:
-                    # print waysSequence
+                    print comparableRoute.get('name')
+                    print 'waysSequence', waysSequence
+                    print 'firstAdd1ofThese2', firstAdd1ofThese2
                     i,rc1,allWaysInRoute =addWaysToRoute(waysSequence, newRelation, i, 0, comparableRoute.get('name'), waymemberslist, firstAdd1ofThese2)
                     if rc1:
                         skip = 0; modified = True
@@ -698,14 +704,20 @@ def checkPTroute(route, aDownloadWasNeeded):
                 ways = findWaysPassingByPlatformNode(stopPlatform, route, member)
                 if ways:
                     if stopPlatformId == firstStopPlatformId:
-                        firstAdd1ofThese2 = previousWaysSequence = ways
+                        firstAdd1ofThese2 = previousWaysSequence = allWaysInRoute = ways
                         continue
                     elif stopPlatformId == lastStopPlatformId and \
                             stopPlatformId in stopPositions and \
-                            not(stopPositions[stopPlatformId] in getEndNodes(waymemberslist[-1])):
+                            (stopPositions[stopPlatformId] in getEndNodes(waymemberslist[-1])):
                                 edge = []
                                 for lway in ways:
-                                    if not(lway in newRelation.getMembers()):
+                                    # print newRelation.getMembers()
+                                    # print lway
+                                    # print lway in allWaysInRoute
+                                    # rc = JOptionPane.showInputDialog(str(lway),str(lway in allWaysInRoute))
+                                    # if not(lway in allWaysInRoute):
+                                    # print dir(newRelation)
+                                    if not(newRelation.getMembersFor([lway])):
                                         edge.append(lway)
                     else:
                         edge = extendEdge(ways)
@@ -722,7 +734,7 @@ def checkPTroute(route, aDownloadWasNeeded):
         if member.isWay():
             way = member.getWay()
             role = member.getRole()
-            if role == '':
+            if role in ['', 'forward', 'backward']:
                 if nextWay:
                     connectingNode = areThese2WaysConnected(way, nextWay)
                     if connectingNode: allExistingMemberWays.setdefault(connectingNode.getUniqueId(), []).append(nextWay)
@@ -731,15 +743,15 @@ def checkPTroute(route, aDownloadWasNeeded):
             nextWay = way
         i-=1
                 
-    # i=0; previousWay = None
-    # while i < len(newRelation.getMembers()):
-        # '''try to fill in the gaps'''
-        # member = newRelation.getMember(i)
-        # i+=1
-        # if member.isWay():
-            # way = member.getWay()
-            # if previousWay:
-                # connectingWay=previousWay
+    i=0; previousWay = None
+    while i < len(newRelation.getMembers()):
+        '''try to fill in the gaps'''
+        member = newRelation.getMember(i)
+        i+=1
+        if member.isWay():
+            way = member.getWay()
+            if previousWay:
+                connectingWay=previousWay
                 # '''first try to use ways which were in the relation previously'''
                 # commonNode = areThese2WaysConnected(way, connectingWay)
                 # ens = getEndNodes(connectingWay)
@@ -765,20 +777,20 @@ def checkPTroute(route, aDownloadWasNeeded):
                     # if commonNode in ens:
                         # ens.remove(commonNode)
                     # otherEndNode = ens[0]; connectingWay = newWay
-                # j=6
-                # while j and connectingWay and not(areThese2WaysConnected(connectingWay, way)):
-                    # j-=1
-                    # previousConnectingWay = connectingWay
-                    # connectingWay=findConnectingWay(connectingWay,way)
-                    # if connectingWay and not(connectingWay in allWaysInRoute):
-                        # allWaysInRoute.append(connectingWay)
-                        ##JOptionPane.showInputDialog(unicode(previousConnectingWay.get('name'))+ ' ' +unicode(connectingWay.get('name')), str(i) + ' ' + str(j))
-                        # newMember = RelationMember('connection ' + str(j),connectingWay)
-                        # newRelation.addMember(i-1, newMember)
-                        # i+=1
-                    # else:
-                        # break
-            # previousWay = way
+                j=16
+                while j and connectingWay and not(areThese2WaysConnected(connectingWay, way)):
+                    j-=1
+                    previousConnectingWay = connectingWay
+                    connectingWay=findConnectingWay(connectingWay,way)
+                    if connectingWay and not(newRelation.getMembersFor([connectingWay])):
+                        allWaysInRoute.append(connectingWay)
+                        #JOptionPane.showInputDialog(unicode(previousConnectingWay.get('name'))+ ' ' +unicode(connectingWay.get('name')), str(i) + ' ' + str(j))
+                        newMember = RelationMember('connection ' + str(j),connectingWay)
+                        newRelation.addMember(i-1, newMember)
+                        i+=1
+                    else:
+                        break
+            previousWay = way
 
     if modified:
         commandsList.append(Command.ChangeCommand(route, newRelation))
@@ -843,3 +855,6 @@ if mv and mv.editLayer and mv.editLayer.data:
                 checkPTroute(relation, aDownloadWasNeeded)
         if aDownloadWasNeeded:
             JOptionPane.showMessageDialog(Main.parent, 'There was incomplete data and downloading mode was initiated,\nNo further quality checks were performed.\nPlease run the script again when all downloads have completed')
+        else:
+            SearchAction.search('type:relation type=route odbl=new',SearchAction.SearchMode.fromCode('R'))
+

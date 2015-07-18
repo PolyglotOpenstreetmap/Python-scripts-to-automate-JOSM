@@ -60,7 +60,7 @@ logVerbosity = 30
 suitableWaysFor =  {'bus':  {'highway':['primary', 'secondary',
                                         'tertiary', 'unclassified',
                                         'residential', 'service',
-                                        'living_street', 'trunk']},
+                                        'trunk']},
                     'tram': {'railway':['tram']}
                     }
 
@@ -101,7 +101,7 @@ def isWaySuitable(way, startingNode = None, checkDeadEnd = True, checkOneWay = T
     endNodes = getEndNodes(way)
     if checkDeadEnd:
         '''check if it's a dead end street'''
-        if way.isIncomplete() or way.get('noexit') == 'yes':
+        if way.isIncomplete() or way.get('area') == 'yes' or way.get('noexit') == 'yes':
             '''if it's not completely downloaded, we don't want to consider it'''
             '''deprecated way of tagging dead end streets'''
             return False
@@ -263,7 +263,7 @@ def findWaysPassingByPlatformNode(node, route, member):
         bboxCalculator.computeBoundingBox([node])
         bboxCalculator.enlargeBoundingBox()
         if bboxCalculator.getBounds():
-           mv.recalculateCenterScale(bboxCalculator)
+           mv.zoomTo(bboxCalculator)
         #mv.zoomTo(node.getEastNorth())
         ignorelist = [node]
         stopPosition = Node()
@@ -312,7 +312,7 @@ def findWaysPassingByPlatformNode(node, route, member):
                 return waysNextToPlatform[nodeId]
             bboxCalculator.enlargeBoundingBox() # zoom out a bit and try again
             if bboxCalculator.getBounds():
-                mv.recalculateCenterScale(bboxCalculator)
+                mv.zoomTo(bboxCalculator)
     if not(found):
         print 'Found no suitable candidate way for this stop'
         return None
@@ -528,19 +528,19 @@ def getSequenceOfWays(stopsSequence, route, comparableRoute):
             if member.isWay(): waysSequence.append(member.getMember())
     return waysSequence
     
-def addWayToRoute(wayToAdd, newRelation, pos, offset, nameForRole, waymemberslist):
+def addWayToRoute(wayToAdd, newRelation, pos, numberOfStops, nameForRole, waymemberslist):
     depth = len(waymemberslist)
     if depth > 3: depth = -3
     else: depth = -1 * depth
     if wayToAdd and not(wayToAdd in waymemberslist[depth:]):
-        # print pos, offset, nameForRole
+        # print pos, numberOfStops, nameForRole
         if not(nameForRole): nameForRole = ''
-        if offset:
-            role = str(pos+1) + str(offset) + ' ' + nameForRole
+        if numberOfStops:
+            role = str(pos - numberOfStops + 1) + ' ' + nameForRole
         else:
             role = str(pos+1) + ' ' + nameForRole
         newMember = RelationMember(role,wayToAdd)
-        position = pos + offset
+        position = pos
         if position < 0: position = 0
         newRelation.addMember(position, newMember)
         waymemberslist.append(wayToAdd)
@@ -548,7 +548,7 @@ def addWayToRoute(wayToAdd, newRelation, pos, offset, nameForRole, waymemberslis
         return pos, True
     return pos, None
     
-def addWaysToRoute(waysToAdd, newRelation, pos, offset, nameForRole, waymemberslist, addOneOfUsFirst):
+def addWaysToRoute(waysToAdd, newRelation, pos, numberOfStops, nameForRole, waymemberslist, addOneOfUsFirst):
     rc = None
     if waysToAdd:
         if addOneOfUsFirst:
@@ -559,7 +559,7 @@ def addWaysToRoute(waysToAdd, newRelation, pos, offset, nameForRole, waymembersl
                     waysToAdd = [way] + waysToAdd
                     break
         for way in waysToAdd:
-            pos, rc = addWayToRoute(way, newRelation, pos, offset, nameForRole, waymemberslist)
+            pos, rc = addWayToRoute(way, newRelation, pos, numberOfStops, nameForRole, waymemberslist)
     return pos, rc, waymemberslist + waysToAdd
 
 def transposeRouteRelation(existingRoute, routeWithNewInformation):
@@ -598,10 +598,12 @@ def checkPTroute(route, aDownloadWasNeeded):
     allWaysInRoute = []
     # waysAlreadyInRoute = {}
     modified = False
-    i=0; newRelation = Relation(route); commandsList = []; previousway = None; skip = 0
+    routeMembers = route.getMembers()
+    i = numberOfStops = len(routeMembers)
+    newRelation = Relation(route); commandsList = []; previousway = None; skip = 0
     previousWaysSequence = []
     firstStopPlatformId = None
-    for member in route.getMembers():
+    for member in routeMembers:
         if member.isNode():
             stopPlatform = member.getNode()
             if stopPlatform.get('highway') == 'bus_stop' or stopPlatform.get('railway') == 'tram_stop':
@@ -613,14 +615,14 @@ def checkPTroute(route, aDownloadWasNeeded):
             # if role == '':
                 # waysAlreadyInRoute[way] = None
     firstAdd1ofThese2 = None
-    for member in route.getMembers():
+    for member in routeMembers:
         """Algorithm:
            Is the node a member of a public_transport=stop_area?
-               Grab way from stop_area
+               Grab way from stop_area (ways connected to stop_position)
            Search near to the node for "highway -highway=bus_stop inview type:way  -closed"
                If one more than one highways are found: Is one of them member of another route=bus relation?
            Also search for "public_transport=stop_position type:node"
-               If found: use the parent way
+               If found: use the parent way(s)
         """
         if skip:
             skip-=1
@@ -654,7 +656,7 @@ def checkPTroute(route, aDownloadWasNeeded):
                     else:
                         firstAdd1ofThese2 = None
                 if len(waysSequence)>1:
-                    i,rc1,allWaysInRoute =addWaysToRoute(waysSequence, newRelation, i, 0, comparableRoute.get('name'), waymemberslist, firstAdd1ofThese2)
+                    i,rc1,allWaysInRoute =addWaysToRoute(waysSequence, newRelation, i, numberOfStops, comparableRoute.get('name'), waymemberslist, firstAdd1ofThese2)
                     if rc1:
                         skip = len(stopsSequence)-1; modified = True
                         notSolved = False
@@ -670,7 +672,7 @@ def checkPTroute(route, aDownloadWasNeeded):
                     print comparableRoute.get('name')
                     print 'waysSequence', waysSequence
                     print 'firstAdd1ofThese2', firstAdd1ofThese2
-                    i,rc1,allWaysInRoute =addWaysToRoute(waysSequence, newRelation, i, 0, comparableRoute.get('name'), waymemberslist, firstAdd1ofThese2)
+                    i,rc1,allWaysInRoute =addWaysToRoute(waysSequence, newRelation, i, numberOfStops, comparableRoute.get('name'), waymemberslist, firstAdd1ofThese2)
                     if rc1:
                         skip = 0; modified = True
                         notSolved = False
@@ -694,7 +696,7 @@ def checkPTroute(route, aDownloadWasNeeded):
                                     rc = JOptionPane.showInputDialog('found a route',str(comparableRoute.get('name')))
                                     if rc == 'q':
                                         quit
-                                    i,rc1,allWaysInRoute =addWaysToRoute(waysSequence, newRelation, i, 0, comparableRoute.get('name'), waymemberslist, firstAdd1ofThese2)
+                                    i,rc1,allWaysInRoute =addWaysToRoute(waysSequence, newRelation, i, numberOfStops, comparableRoute.get('name'), waymemberslist, firstAdd1ofThese2)
                                     if rc1:
                                         skip = 0; modified = True
                                         notSolved = False
@@ -721,7 +723,7 @@ def checkPTroute(route, aDownloadWasNeeded):
                                         edge.append(lway)
                     else:
                         edge = extendEdge(ways)
-                    i,rc2,allWaysInRoute =addWaysToRoute(edge, newRelation, i, 0, stopPlatform.get('name'), waymemberslist, firstAdd1ofThese2)
+                    i,rc2,allWaysInRoute =addWaysToRoute(edge, newRelation, i, numberOfStops, stopPlatform.get('name'), waymemberslist, firstAdd1ofThese2)
                     if rc2: modified = True
             newRelation.put('odbl', 'new'); notFound = True
 
@@ -734,7 +736,7 @@ def checkPTroute(route, aDownloadWasNeeded):
         if member.isWay():
             way = member.getWay()
             role = member.getRole()
-            if role in ['', 'forward', 'backward']:
+            if role in ['', 'forward', 'backward', 'route']:
                 if nextWay:
                     connectingNode = areThese2WaysConnected(way, nextWay)
                     if connectingNode: allExistingMemberWays.setdefault(connectingNode.getUniqueId(), []).append(nextWay)
@@ -797,12 +799,12 @@ def checkPTroute(route, aDownloadWasNeeded):
         Main.main.undoRedo.add(Command.SequenceCommand("Adding ways directly adjacent to stop nodes", commandsList))
         commandsList = []
     modified = False
-    # print dir(RelationEditor.getEditor)
-    # rEd = RelationEditor.getEditor(mv.editLayer, route, [route]) 
-    # rd = RelationDialogManager()
-    # ed = rd.getEditorForRelation(mv.editLayer, route)
-    # print dir(rd)
-    # print rd.windowOpened(rd)
+    
+    firstMember=newRelation.getMembers()[0]
+    Main.main.getEditLayer().data.setSelected(firstMember)
+    AutoScaleAction.zoomToSelection()
+    # print (dir(mv))
+    # RelationEditor.getEditor(Main.main.getEditLayer(), newRelation, [firstMember]).setVisible(True)
 
 aDownloadWasNeeded = False
 '''

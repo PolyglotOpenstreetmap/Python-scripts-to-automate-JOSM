@@ -68,11 +68,13 @@ class EntityIdType(DataType):
         self.type='entityid'
         self.value=value
     def asJSON(self):
-        json='''{"snaktype":"value","property":"%s","datavalue":{"value": {"entity-type": "item","numeric-id": %s},"type": "wikibase-entityid"}}''' % (claim['property'], claim['value'][1:])
+        json='''{"value": {"entity-type": "item","numeric-id": %s},"type": "wikibase-entityid"}''' % (self.value[1:])
 class PropertyIdType(DataType):
     def __init__(self, value=''):
         self.type='propertyid'
         self.value=value
+    def asJSON(self):
+        json='''"value","property":"%s","datavalue":''' % (self.value)
 class NumericType(DataType):
     def __init__(self, value=''):
         self.type='numeric'
@@ -94,8 +96,10 @@ class URLType(DataType):
         self.type='url'
         self.value=value
 
-{"snaktype": "value","property": "'+claim['sourceproperty']+'","datavalue": {"value": "'+claim['source']+'","type": "string"},"datatype": "url"}
-{"snaktype": "value","property": "P854","datavalue": {"value": "http://www.ubos.org","type": "string"},"datatype": "url"}
+{"snaktype": "value","property": "'+claim['sourceproperty']+'",
+"datavalue": {"value": "'+claim['source']+'","type": "string"},"datatype": "url"}
+{"snaktype": "value","property": "P854",
+"datavalue": {"value": "http://www.ubos.org","type": "string"},"datatype": "url"}
 
 class WikidataItem():
     def __init__(self, itemData=''):
@@ -403,16 +407,20 @@ if mv and mv.editLayer and mv.editLayer.data:
                             Q_school = res['id']
                             print Q_school
                             newSchool = Node(element)
-                            newSchool.put('wikidata', Q_school)
-                            if not(isced_level) and isced: newSchool.put('isced:level', isced)
-
-                            CommandsList=[Command.ChangeCommand( element, newSchool)]
-                            Main.main.undoRedo.add(Command.SequenceCommand("Add wikidata and isced:level tags to school", CommandsList))
+                            dirty =False
+                            if newSchool.get('wikidata') != Q_school:
+                                newSchool.put('wikidata', Q_school); dirty=True
+                            if not(isced_level) and isced and newSchool.get('isced:level') != isced_level:
+                                newSchool.put('isced:level', isced); dirty=True
+                            if dirty:
+                                CommandsList=[Command.ChangeCommand( element, newSchool)]
+                                Main.main.undoRedo.add(Command.SequenceCommand("Add wikidata and isced:level tags to school", CommandsList))
                             found = True
                             break
                     if found: break
                 else:
                     print 'not found yet'
+            if element.isNew(): noNewSchools=False
             if Q_school:
                 wikidataCoords = wd.fetchCoordinates(Q_school)
                 print wikidataCoords
@@ -432,12 +440,13 @@ if mv and mv.editLayer and mv.editLayer.data:
             for coordStatement in coordStatements:
                 print coordStatements[coordStatement]
                 qs_url += URLEncoder.encode(coordStatements[coordStatement], "UTF-8")
-                if number > 7:
+                if number > 4:
                     OpenBrowser.displayUrl('http://tools.wmflabs.org/wikidata-todo/quick_statements.php?list=' + qs_url)# + '&doit')
                     number = 0; qs_url=''
                 else:
                     number+=1
-            if qs_url: OpenBrowser.displayUrl('http://tools.wmflabs.org/wikidata-todo/quick_statements.php?list=' + qs_url + '&doit')
+            if qs_url:
+                OpenBrowser.displayUrl('http://tools.wmflabs.org/wikidata-todo/quick_statements.php?list=' + qs_url + '&doit')
         if noNewSchools:
             print 'switching to regular account'
             if not(Main.pref.get("osm-server.username") == osm_account):
@@ -446,6 +455,8 @@ if mv and mv.editLayer and mv.editLayer.data:
         else:
             print 'switching to import account and selecting all new schools'
             Main.pref.put("osm-server.username", osm_import_account)
-            SearchAction.search('amenity new (school | kindergarten | university)',SearchAction.SearchMode.fromCode('R'))
-            Utils.copyToClipboard('https://wiki.openstreetmap.org/wiki/WikiProject_Uganda/Import_Uganda_Bureau_Of_Statistics_Education_Facilities')
+            SearchAction.search('amenity new (school | kindergarten | university | college)',SearchAction.SearchMode.fromCode('R'))
+            Utils.copyToClipboard('''import=yes
+url=https://wiki.openstreetmap.org/wiki/WikiProject_Uganda/Import_Uganda_Bureau_Of_Statistics_Education_Facilities
+source=www.ubos.org''')
             JOptionPane.showMessageDialog(Main.parent, "Switched to IMPORT OSM account, please upload selection. (new schools are selected automatically) url= has been copied to the clipboard for convenience")

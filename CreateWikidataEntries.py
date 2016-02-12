@@ -19,6 +19,8 @@ This code illustrates how to use Jython to:
 from javax.swing import JOptionPane
 from org.openstreetmap.josm import Main
 import org.openstreetmap.josm.command as Command
+import org.openstreetmap.josm.data.projection.Projection as Projection
+import org.openstreetmap.josm.data.osm.OsmPrimitive  as OsmPrimitive
 import org.openstreetmap.josm.data.osm.Node as Node
 import org.openstreetmap.josm.data.osm.Way as Way
 import org.openstreetmap.josm.data.osm.Relation as Relation
@@ -27,6 +29,7 @@ import org.openstreetmap.josm.data.osm.DataSet as DataSet
 import org.openstreetmap.josm.tools.Utils as Utils
 import org.openstreetmap.josm.tools.OpenBrowser as OpenBrowser
 import org.openstreetmap.josm.tools.HttpClient as HttpClient
+import org.openstreetmap.josm.tools.Geometry as Geometry
 import org.openstreetmap.josm.gui.preferences.advanced.PrefEntry as PrefEntry
 import org.openstreetmap.josm.actions.search.SearchAction as SearchAction
 # import org.openstreetmap.josm.actions.UploadSelectionAction as UploadSelectionAction
@@ -49,6 +52,10 @@ osm_import_account = 'Polyglot_Import'
 latlonRE = re.compile(r'LatLon\[lat=(?P<lat>-*\d+(\.\d\d\d\d\d\d)?)\d*,lon=(?P<lon>-*\d+(\.\d\d\d\d\d\d)?)\d*\]')
 PrimarySchoolRE = re.compile(r'\s[Pp]r*\\*(im|imary)*\.*\s*[Ss]chool')
 NurseryAndPrimarySchoolRE = re.compile(r'.*\sN/\s*[Pp]r*(im|imary)*\.*\s*[Ss]chool')
+
+dummyNode = Node()
+dummyWay = Way()
+dummyRelation = Relation()
 
 cookieManager = CookieManager()
 CookieHandler.setDefault(cookieManager)
@@ -98,8 +105,8 @@ class URLType(DataType):
 
 {"snaktype": "value","property": "'+claim['sourceproperty']+'",
 "datavalue": {"value": "'+claim['source']+'","type": "string"},"datatype": "url"}
-{"snaktype": "value","property": "P854",
-"datavalue": {"value": "http://www.ubos.org","type": "string"},"datatype": "url"}
+{"snaktype": "value","property": "P248",
+"datavalue": {"value": "Q22679902","type": "string"},"datatype": "url"}
 
 class WikidataItem():
     def __init__(self, itemData=''):
@@ -149,7 +156,7 @@ class WikidataItem():
                 for claim in self.item[group]:
                     json+=comma2 + '{"mainsnak":{"snaktype":"value","property":"'+ claim['property'] +'","datavalue":{"value": {"entity-type": "item","numeric-id": '+ claim['value'][1:] +'},"type": "wikibase-entityid"}},"type":"statement","rank":"'+claim['rank']+'"'
                     if 'sourceproperty' in claim and 'source' in claim:
-                        json+=',"references":[{"snaks":{"'+claim['sourceproperty']+'":[{"snaktype": "value","property": "'+claim['sourceproperty']+'","datavalue": {"value": "'+claim['source']+'","type": "string"},"datatype": "url"}]}}]'
+                        json+=',"references":[{"snaks":{"'+claim['sourceproperty']+'":[{"snaktype": "value","property": "'+claim['sourceproperty']+'","datavalue": {"value": {"entity-type": "item","numeric-id": '+claim['source'][1:]+'},"type": "wikibase-entityid"},"datatype": "url"}]}}]'
                     if not(comma2): comma2 = ','
                     json+='}'
                 json+=']'
@@ -171,8 +178,8 @@ class WikidataItem():
             if not(comma1): comma1 = ','
 
         json+='}'
+        print json
         return json
-        # print json
         # pprint.pprint(json)
 
 class Wikidata():
@@ -312,12 +319,22 @@ if mv and mv.editLayer and mv.editLayer.data:
         noNewSchools = True
         coordStatements = {}  
         for element in selectedElements:    
+            if element.getType()==dummyNode.getType(): type='node'
+            if element.getType()==dummyWay.getType(): type='way'
+            if element.getType()==dummyRelation.getType(): type='relation'
+
             Q_school = ''
             wi=WikidataItem()
             housenumber = street = district = county = subcounty = parish = city = amenity = isced_level = operator_type = name = wikidata = ''
-            print dir(element)
+            # print dir(element)
             if element.hasKey('name'): name = str(element.get('name'))
-            if name=='Primary School' or name=='Secondary School' or name=='Nursery School':
+            if (not(name) or 
+                  name=='Primary School' or
+                  name=='Secondary School' or
+                  name=='Nursery School' or
+                  name=='Vocational School' or
+                  name=='School' or
+                  name.find('rphanage')>0):
                 print 'Skipping school with nondescript name'
                 continue
             if element.hasKey('addr:housenumber'): housenumber = str(element.get('addr:housenumber'))
@@ -344,23 +361,23 @@ if mv and mv.editLayer and mv.editLayer.data:
             print wikidata
             if 'Prim' in name and ('Nurser' in name or 'Kinderga' in name):
                 isced = '0;1'
-                wi.addClaim('P31', 'Q9842', 'P854', "http://www.ubos.org")                  # primary school
-                wi.addClaim('P31', 'Q1076052', 'P854', "http://www.ubos.org")               # nursery school
+                wi.addClaim('P31', 'Q9842', 'P248', "Q22679902")                  # primary school
+                wi.addClaim('P31', 'Q1076052', 'P248', "Q22679902")               # nursery school
                 level = 'primary and nursery '
             elif 'Prim' in name:
                 isced = '1'
-                wi.addClaim('P31', 'Q9842', 'P854', "http://www.ubos.org")                  # primary school
+                wi.addClaim('P31', 'Q9842', 'P248', "Q22679902")                  # primary school
                 level = 'primary '
             elif 'kindergarten' in amenity or 'Nurser' in name or 'Kinderga' in name:
                 isced = '0'
-                wi.addClaim('P31', 'Q1076052', 'P854', "http://www.ubos.org")               # nursery school
+                wi.addClaim('P31', 'Q1076052', 'P248', "Q22679902")               # nursery school
                 level = 'nursery '
             elif 'Sec' in name or 'High' in name or 'College' in name:
                 isced = '2;3;4'
-                wi.addClaim('P31', 'Q159334', 'P854', "http://www.ubos.org")                # secondary school
+                wi.addClaim('P31', 'Q159334', 'P248', "Q22679902")                # secondary school
                 level = 'secondary '
             else:
-                wi.addClaim('P31', 'Q3914', 'P854', "http://www.ubos.org")                  # school
+                wi.addClaim('P31', 'Q3914', 'P248', "Q22679902")                  # school
                 isced = ''; level = ''
 
             if city and not(city=='None'):
@@ -371,7 +388,7 @@ if mv and mv.editLayer and mv.editLayer.data:
             print '==================='
             print description
             # pprint.pprint(result)
-            if result['success'] and result['search']:
+            if 'success' in result and result['search']:
                 for res in result['search']:
                     # print res
                     if 'description' in res and res['description'] == description:
@@ -389,24 +406,29 @@ if mv and mv.editLayer and mv.editLayer.data:
                     if result['success'] and result['search']:
                         Q_district = result['search'][0]['id']
                         print Q_district
-                        wi.addClaim('P131', Q_district, 'P854', "http://www.ubos.org") # administrative region, district of Uganda
+                        wi.addClaim('P131', Q_district, 'P248', "Q22679902") # administrative region, district of Uganda
                 wi.addDescription('en', description)
-                wi.addClaim('P17', 'Q1036', 'P854', "http://www.ubos.org") # country Uganda
-                # wi.addClaim('P969', city + ', ' + parish + ', ' + subcounty + ', ' + county + ', ' + district, 'P854', "http://www.ubos.org") # street address
+                wi.addClaim('P17', 'Q1036', 'P248', "Q22679902") # country Uganda
+                # wi.addClaim('P969', city + ', ' + parish + ', ' + subcounty + ', ' + county + ', ' + district, 'P248', "Q22679902") # street address
                 # pprint.pprint(wi.asJSON())
-                print(wd.createNewItem(data=wi.asJSON()))
+                wd.createNewItem(data=wi.asJSON())
             found = False
-            for i in range(12, 0, -1):
+            for i in range(2, 0, -1):
                 time.sleep(i/11.0)
                 result = wd.search(valueOrDescription = name)
                 # pprint.pprint(result)
-                if result['success'] and result['search']:
+                if 'success' in result and result['search']:
                     for res in result['search']:
                         print res
                         if 'description' in res and res['description'] == description:
                             Q_school = res['id']
                             print Q_school
-                            newSchool = Node(element)
+                            if type=='node':
+                                newSchool = Node(element)
+                            elif type=='way':
+                                newSchool = Way(element)
+                            else:
+                                newSchool = Relation(element)
                             dirty =False
                             if newSchool.get('wikidata') != Q_school:
                                 newSchool.put('wikidata', Q_school); dirty=True
@@ -425,28 +447,40 @@ if mv and mv.editLayer and mv.editLayer.data:
                 wikidataCoords = wd.fetchCoordinates(Q_school)
                 print wikidataCoords
                 if not(wikidataCoords['claims']):
-                    m=latlonRE.match(str(element.getCoor()))
-                    print 'match: ', m, 'new: ', element.isNew()
-                    if not(element.isNew()) and m:
+                    lon = lat = None
+                    if type=='node':
+                        latlon = element.getCoor()
+                        lon = str(latlon.getX())
+                        lat = str(latlon.getY())
+                    else:
+                        # print(dir(mv))
+                        latlon= mv.getProjection().eastNorth2latlon(Geometry.getCentroid(element.getNodes()))
+                        # print dir(latlon)
+                        lon = str(latlon.getX())
+                        lat = str(latlon.getY())
+                    
+                    # m=latlonRE.match(str(coor))
+                    # print 'match: ', m, 'new: ', element.isNew()
+                    if not(element.isNew()) and lon and lat:# and m:
                         print 'Coordinates not yet present in Wikidata, building up coordStatements'
-                        coordStatement = Q_school + '''\tP625\t@''' + m.group('lat') + '''/''' + m.group('lon') + '''\tS854\t"https://www.openstreetmap.org/node/''' + str(element.getId()) + '''"\n'''
+                        coordStatement = Q_school + '''\tP625\t@''' + lat[:7] + '''/''' + lon[:7] + '''\tS854\t"https://www.openstreetmap.org/node/''' + str(element.getId()) + '''"\n'''
                         coordStatements[Q_school] = coordStatement
                     pprint.pprint(coordStatements)
                 else:
                     print 'Coordinates already present in Wikidata'
 
         if coordStatements:
-            number = 0; qs_url=''
+            number = 0; qs_url=''; doit = '&doit'
             for coordStatement in coordStatements:
                 print coordStatements[coordStatement]
                 qs_url += URLEncoder.encode(coordStatements[coordStatement], "UTF-8")
-                if number > 4:
-                    OpenBrowser.displayUrl('http://tools.wmflabs.org/wikidata-todo/quick_statements.php?list=' + qs_url)# + '&doit')
+                if number > 8:
+                    OpenBrowser.displayUrl('http://tools.wmflabs.org/wikidata-todo/quick_statements.php?list=' + qs_url + doit)
                     number = 0; qs_url=''
                 else:
                     number+=1
             if qs_url:
-                OpenBrowser.displayUrl('http://tools.wmflabs.org/wikidata-todo/quick_statements.php?list=' + qs_url + '&doit')
+                OpenBrowser.displayUrl('http://tools.wmflabs.org/wikidata-todo/quick_statements.php?list=' + qs_url + doit)
         if noNewSchools:
             print 'switching to regular account'
             if not(Main.pref.get("osm-server.username") == osm_account):

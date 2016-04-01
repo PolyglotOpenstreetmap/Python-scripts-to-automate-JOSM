@@ -74,19 +74,6 @@ class BotSettings():
     PASSWORD = Main.pref.get("wikidata.password")
     EDIT_AS_BOT = False
 
-seventhdayAdventistRE = re.compile(r'[\s^][Ss](eventh)*\.*\s*-*[Dd](ay)*\.*\s*[Aa](dventist)*\.*\s')
-churchOfUgandaRE = re.compile(r'\s[Cc](hurch)*\.*\s*([Oo]f*|/)*\.*\s*[Uu](ganda)*\.*\s')
-earlyChildDevelopmentRE = re.compile(r'\s[E](arly)*\.*\s*[Cc]*(hild)*\.*/*\s*[Dd](evelopment)*\.*\s')
-muslimRE = re.compile(r'([Mm]oslem|[Mm]uslim|[Ii]slam|Imam\s+)')
-notSaintRE = re.compile(r'^(Saint)\s+([Ar|Ep|Andard])')
-IntegratedRE = re.compile(r'Intergrated')
-andRE = re.compile(r'\sAnd\s')
-orRE = re.compile(r'\sOr\s')
-ofRE = re.compile(r'\sOf\s')
-schoolRE = r'\.*/*\\*\s*[Ss](chool|chl|ch|c)\.*'
-primarySchoolRE = re.compile(r'\s[Pp]r*\\*(im|imary)*' + schoolRE)
-secondarySchoolRE = re.compile(r'\s[Ss]e*\\*(condary)*' + schoolRE)
-nurseryAndPrimarySchoolRE = re.compile(r'\sN(ur)*/\s*[Pp]r*(im|imary)*' + schoolRE)
 
 WD_QrefRE = re.compile(r'^([Qq]\d+)$')
 WD_PrefRE = re.compile(r'^([Pp]\d+)$')
@@ -170,26 +157,201 @@ operatedByProperty = Datamodel.makeWikidataPropertyIdValue("P137")
 refUrlProperty = Datamodel.makeWikidataPropertyIdValue("P854")
 administrativeRegionProperty = Datamodel.makeWikidataPropertyIdValue("P131")
 coordinatesProperty = Datamodel.makeWikidataPropertyIdValue("P625")
-
 countryProperty = Datamodel.makeWikidataPropertyIdValue("P17")
-countryUgandaId = Datamodel.makeWikidataItemIdValue("Q1036")
-countryUgandaStatement = buildStatement(NEWITEM, countryProperty, countryUgandaId, ubosReference)
 
-primarySchoolId = Datamodel.makeWikidataItemIdValue("Q9842")
-nurserySchoolId = Datamodel.makeWikidataItemIdValue("Q1076052")
-secondarySchoolId = Datamodel.makeWikidataItemIdValue("Q159334")
-schoolId = Datamodel.makeWikidataItemIdValue("Q3914")
-seventhDayAdventistsId = Datamodel.makeWikidataItemIdValue("Q104319")
-churchOfUgandaId = Datamodel.makeWikidataItemIdValue("Q1723759")
+countryUgandaStatement = buildStatement(NEWITEM, countryProperty, Datamodel.makeWikidataItemIdValue("Q1036"), ubosReference)
+primarySchoolStatement = buildStatement(NEWITEM, instanceOf, Datamodel.makeWikidataItemIdValue("Q9842"), ubosReference) 
+nurserySchoolStatement = buildStatement(NEWITEM, instanceOf, Datamodel.makeWikidataItemIdValue("Q1076052"), ubosReference) 
+secondarySchoolStatement = buildStatement(NEWITEM, instanceOf, Datamodel.makeWikidataItemIdValue("Q159334"), ubosReference) 
+schoolStatement = buildStatement(NEWITEM, instanceOf, Datamodel.makeWikidataItemIdValue("Q3914"), ubosReference) 
 
-primarySchoolStatement = buildStatement(NEWITEM, instanceOf, primarySchoolId, ubosReference) 
-nurserySchoolStatement = buildStatement(NEWITEM, instanceOf, nurserySchoolId, ubosReference) 
-secondarySchoolStatement = buildStatement(NEWITEM, instanceOf, secondarySchoolId, ubosReference) 
-schoolStatement = buildStatement(NEWITEM, instanceOf, schoolId, ubosReference) 
+churchOfUgandaStatement = buildStatement(NEWITEM, operatedByProperty, Datamodel.makeWikidataItemIdValue("Q1723759"), ubosReference) 
+seventhDayAdventistsStatement = buildStatement(NEWITEM, operatedByProperty, Datamodel.makeWikidataItemIdValue("Q104319"), ubosReference) 
+    
+class NameParser():
+    earlyChildDevelopmentRE = re.compile(r'''(?ux)
+                                    \s                 # space
+                                    [E](arly)*         # Early, but usually abbreviated to ECD
+                                    \.*\s*             # Could be with . or spaces in between
+                                    [Cc]*(hild)*       # Child
+                                    \.*/*\s*
+                                    [Dd](evelopment)*  # Development
+                                    \.*\s              # may have a ., must have a space ''')
+    muslimRE = re.compile(r'''(?ux)
+                                   ([Mm]oslem |
+                                    [Mm]uslim |
+                                    [Ii]slam |
+                                    Imam\s+ |
+                                    Quran)''')
+    schoolRE = (r'''(?ux)\.*/*\\*\s*([Ss](chool|chl|ch|c)\.*|Chool)''') # School abbreviated in various ways
+    commonmisspellings = [
+        (re.compile(r'''\s*&\s*'''),                                ' & '),
+        (re.compile(r'''Ii'''),                                     'II'),
+        (re.compile(r'''Iii'''),                                    'III'),
+        (re.compile(r'''Micheal'''),                                'Michael'),
+        (re.compile(r'''Magdalane'''),                              'Magdalena'),
+        (re.compile(r'''clare'''),                                  'Clare'),
+        (re.compile(r'''Lawrance'''),                               'Lawrence'),
+        (re.compile(r'''Domnic'''),                                 'Dominic'),
+        (re.compile(r'''Matyr'''),                                  'Martyr'),
+        (re.compile(r'''Aloysious'''),                              'Aloysius'),
+        (re.compile(r'''S[ae]cre[dt]\s+Heart'''),                   'Sacred Heart'),
+        (re.compile(r'''Mor*dern'''),                               'Modern'),
+        (re.compile(r'''Cntr'''),                                   'Center'),
+        (re.compile(r'''Acc*ademy'''),                              'Academy'),
+        (re.compile(r'''Telet[au]bb*ies'''),                        'Teletubbies'),
+        (re.compile(r'''(?uxi)buss*iness*'''),                      'Business'),
+        (re.compile(r'''(?uxi)\sPrep(\.|aratory)*\s''' + schoolRE), ' Preparatory School'),
+        (re.compile(r'''(?uxi)\sN(ur|ursery)*/\s*Pr*(im|imary)*''' + schoolRE),
+                                                                    ' Nursery and Primary School'),
+        (re.compile(r'''Intern*ational'''),                         'International'),
+        (re.compile(r'''Intergrated'''),                            'Integrated'),
+        (re.compile(r'''Juniour'''),                                'Junior'),
+        (re.compile(r'''Sheph*[ea]rd'''),                           'Shepherd'),
+        (re.compile(r'''^Saintt*\s'''),                             'Saint '),
+        (re.compile(r'''^S[tT][\.|\s]*'''),                         'Saint '),
+        (re.compile(r"""(?uxi)(Queen       |
+                               King        |
+                               Peter       |
+                               Michael     |
+                               Mary        |
+                               Clare       |
+                               Steven      |
+                               Martyr      |
+                               Andrew      |
+                               Edward
+							   )s'*"""),                            lambda pat: pat.group(1) + "'s"),
+        (re.compile(r'''(?ux)^(Saint)      # fix wrong replacement of St to Saint
+                        \s+
+                        (A[nr]dard         # Standard, quite a few were apparently Stardard
+                        |Arch              # Starch
+                        |Ate               # State
+                        |Ar                # Star
+                        |Ep                # Step
+                        |One               # Stone
+                        |Ephen             # Stephen
+                        )\s'''),                                    lambda pat: 'St' + pat.group(2).lower()+ ' '),
+        (re.compile(r'''Stardard'''),                               'Standard'), # quite a few were apparently Stardard
+        (re.compile(r'''(?uxi)\bR\.*C\.*C\.*\b'''),                 'Roman Catholic Church'), #RCC or R.C.C.
+        (re.compile(r'''\bR\.*C\.*\b'''),                           'Roman Catholic'),        #RC  or R.C.
+        (re.compile(r'''(?ux)
+                        \b              # word boundary
+                        [Ss](eventh)*   # Seventh, could be abbreviated
+                        \.*\s*-*        # may have a . or a space or a dash
+                        [Dd](ay)*       # Day, could be abbreviated
+                        \.*\s*          # may have a . or a space
+                        [Aa](dventist)* # Adventist, could be abbreviated
+                        \.*\b           # may have a ., must end at word boundary '''),
+                                                                    'Seventh-day Adventist'),    #SDA, S.D.A., etc
+        (re.compile(r'''(?ux)
+                        \b              # word boundary
+                        [Cc](hurch)*    # Church, but can also be abbreviated as C/U or CoU
+                        \.*\s*          # or C.O.U.
+                        ([Oo]f*|/)*     # of is not necessarily present
+                        \.*\s*
+                        [Uu](ganda)*    # Uganda, may be abbreviated
+                        \.*\b           # may have a ., must end at word boundary '''),
+                                                                    'Church of Uganda'),
+        (re.compile(r'''Stelizabeth'''),                            'Saint Elizabeth'),
+        (re.compile(r'''^Devine'''),                                'Divine'),
+        (re.compile(r'''Quaran'''),                                 'Quran'),
+        (re.compile(r'''Bourding'''),                               'Boarding'),
+        (re.compile(r'''Coolege'''),                                'College'),
+        (re.compile(r'''HighWay'''),                                'Highway'),
+        (re.compile(r'''(?uxi)\sP\.*S\.(\s|$)'''),
+                                                                    ' Primary School '),
+        (re.compile(r'''(?uxi)\sP(r*\\*(i|im|ima[rc]*y|mary)*|\.)\s'''),
+                                                                    ' Primary '),
+        (re.compile(r'''(?uxi)\s((S(chool|chl|ch|c)\.*)|Chool)'''),
+                                                                    ' School '),
+        (re.compile(r'''(?uxi)\bS(\.*|\s*)S\b\.*-*'''),             'Secondary School '),
+        (re.compile(r'''(^\s+|\s+$)'''),                            ''),
+        (re.compile(r'''(\s\s+)'''),                                ' '),
+        ]
 
-churchOfUgandaStatement = buildStatement(NEWITEM, operatedByProperty, churchOfUgandaId, ubosReference) 
-seventhDayAdventistsStatement = buildStatement(NEWITEM, operatedByProperty, seventhDayAdventistsId, ubosReference) 
+    primarySchoolRE = re.compile(r'''(?ux)\sPrimary''')
+    secondarySchoolRE = re.compile(r'''(?ux)\s[Ss]e*\\*(conda*ry)*''' + schoolRE) # Secondary School abbreviated in various ways
+    kindergartenRE = re.compile(r'''(?ux)\sKind[ea]rgar*ten''')
+    nurserySchoolRE = re.compile(r'''(?ux)\s[Nn](\.|urs[ea]ry)*\s''')
+    nurseryAndPrimarySchoolRE = re.compile(r'''(?ux)\sNursery\s(and|&)\sPrimary\s''' + schoolRE)
+    capitaliseAllButShortWordsRE = re.compile(r"""(?ux)
+                                     (?P<startOfStringOrSpace>^|\s)
+                                     (?P<word>\S+)
+                                      """)
+    def capitaliseAllButShortWords(self, m):
+        lowerWord = m.group('word').lower()
+        #print lowerWord
+        if lowerWord in ['and','or','of','for','the']:
+            return m.group('startOfStringOrSpace') + lowerWord
+        else:
+            return m.group('startOfStringOrSpace') + m.group('word')[0].upper() + m.group('word')[1:]
 
+    def __init__(self, name):
+        self.tagsToSet = {'name': name}
+        self.extraWDStatements = []
+        self.level = ''
+    def parse(self):
+        name = self.capitaliseAllButShortWordsRE.sub(self.capitaliseAllButShortWords, self.tagsToSet['name'])
+        for subRE,repl in self.commonmisspellings:
+            name=subRE.sub(repl,name)
+            #print name, repl
+        #print 'after substitions:', name
+        if 'Seventh-day Adventist' in name:
+            self.tagsToSet['operator'] = 'Seventh-day Adventist Church'
+            self.tagsToSet['operator:wikidata'] = 'Q104319'
+            self.tagsToSet['religion'] = 'christian'
+            self.tagsToSet['denomination'] = 'adventist'
+            self.extraWDStatements.append(seventhDayAdventistsStatement)
+
+        if 'Church of Uganda' in name:
+            self.tagsToSet['operator'] = 'Church of Uganda'
+            self.tagsToSet['operator:wikidata'] = 'Q1723759'
+            self.tagsToSet['religion'] = 'christian'
+            self.tagsToSet['denomination'] = 'anglican'
+            self.extraWDStatements.append(churchOfUgandaStatement)
+
+        if self.muslimRE.search(name):
+            self.tagsToSet['religion'] = 'muslim'
+
+        if 'Roman Catholic' in name:
+            self.tagsToSet['religion'] = 'christian'
+            self.tagsToSet['denomination'] = 'roman_catholic'
+        elif 'Catholic' in name:
+            self.tagsToSet['religion'] = 'christian'
+            self.tagsToSet['denomination'] = 'catholic'
+        elif 'Christian' in name:
+            self.tagsToSet['religion'] = 'christian'
+
+        name = self.earlyChildDevelopmentRE.sub(' Early Childhood Development  ', name)
+        if self.earlyChildDevelopmentRE.search(name):
+            self.tagsToSet['operator'] = 'Early Childhood Development'
+
+        name = self.nurserySchoolRE.sub(' Nursery ', name)
+        name = self.kindergartenRE.sub(' Kindergarten', name)
+        print 'before level: ', name
+        if self.nurseryAndPrimarySchoolRE.search(name) or ((self.nurserySchoolRE.search(name) or self.kindergartenRE.search(name)) and self.primarySchoolRE.search(name)):
+            self.extraWDStatements.extend([primarySchoolStatement, nurserySchoolStatement])
+            self.tagsToSet['isced:level'] = '0;1'
+            self.level = 'nursery and primary '
+        elif self.nurserySchoolRE.search(name) or self.kindergartenRE.search(name):
+            self.extraWDStatements.append(nurserySchoolStatement)
+            self.tagsToSet['isced:level'] = '0'
+            self.level = 'nursery '
+        elif self.primarySchoolRE.search(name):
+            self.extraWDStatements.append(primarySchoolStatement)
+            self.tagsToSet['isced:level'] = '1'
+            self.level = 'primary '
+        name = self.secondarySchoolRE.sub(' Secondary School', name)
+        if self.secondarySchoolRE.search(name):
+            self.extraWDStatements.append(secondarySchoolStatement)
+            self.tagsToSet['isced:level'] = '2;3;4'
+            self.level = 'secondary '
+        self.tagsToSet['name'] = name.replace('  ',' ')
+        #self.extraWDStatements.append(schoolStatement)
+        #self.tagsToSet['isced:level'] = ''; level = ''
+
+        return self.tagsToSet, self.extraWDStatements, self.level
+							
 districtIds={}
 mv = getMapView()
 
@@ -228,52 +390,8 @@ if mv and mv.editLayer and mv.editLayer.data:
                 print 'Skipping school with nondescript name'
                 continue
             print name
-            tagsToSet['name'] = seventhdayAdventistRE.sub(' Seventh-day Adventist  ', name)
-            if not(tagsToSet['name'] == name):
-                tagsToSet['operator'] = 'Seventh-day Adventist Church'
-                tagsToSet['operator:wikidata'] = 'Q104319'
-                tagsToSet['religion'] = 'christian'
-                tagsToSet['denomination'] = 'adventist'
-                extraWDStatements.append(seventhDayAdventistsStatement)
+            tagsToSet, extraWDStatements, level = NameParser(name).parse()
             name = tagsToSet['name']
-
-            tagsToSet['name'] = churchOfUgandaRE.sub(' Church of Uganda  ', name)
-            if not(tagsToSet['name'] == name):
-                tagsToSet['operator'] = 'Church of Uganda'
-                tagsToSet['operator:wikidata'] = 'Q1723759'
-                tagsToSet['religion'] = 'christian'
-                tagsToSet['denomination'] = 'anglican'
-                extraWDStatements.append(churchOfUgandaStatement)
-            name = tagsToSet['name']
-
-            tagsToSet['name'] = notSaintRE.sub(lambda pat: 'St' + pat.group(2).lower(), name)
-            name = tagsToSet['name']
-
-            tagsToSet['name'] = IntegratedRE.sub('Integrated', name)
-            name = tagsToSet['name']
-
-            if muslimRE.search(name):
-                print 'setting religion to MUSLIM'
-                tagsToSet['religion'] = 'muslim'
-            name = tagsToSet['name']
-
-            tagsToSet['name'] = earlyChildDevelopmentRE.sub(' Early Childhood Development  ', name)
-            if not(tagsToSet['name'] == name):
-                tagsToSet['operator'] = 'Early Childhood Development'
-            name = tagsToSet['name']
-
-            tagsToSet['name'] = nurseryAndPrimarySchoolRE.sub(' Nursery and Primary School', name)
-            name = tagsToSet['name']
-            tagsToSet['name'] = primarySchoolRE.sub(' Primary School', name)
-            name = tagsToSet['name']
-            tagsToSet['name'] = secondarySchoolRE.sub(' Secondary School', name)
-            name = tagsToSet['name']
-            tagsToSet['name'] = andRE.sub(' and ', name)
-            name = tagsToSet['name']
-            tagsToSet['name'] = ofRE.sub(' of ', name)
-            name = tagsToSet['name']
-            tagsToSet['name'] = orRE.sub(' or ', name)
-            tagsToSet['name'] = name = tagsToSet['name'].replace('  ',' ')
             print name
             # t
             if element.hasKey('addr:housenumber'): housenumber = str(element.get('addr:housenumber'))
@@ -326,25 +444,6 @@ if mv and mv.editLayer and mv.editLayer.data:
                     description = 'village or city in Uganda'
                     extraWDStatements.append(buildStatement(NEWITEM, instanceOf, "Q486972", ubosReference)) # human settlement
                     extraWDStatements.append(buildStatement(NEWITEM, administrativeRegionProperty, administrativeRegion, ubosReference))
-            elif 'Prim' in name and ('Nurser' in name or 'Kinderga' in name):
-                extraWDStatements.extend([primarySchoolStatement, nurserySchoolStatement])
-                tagsToSet['isced:level'] = '0;1'
-                level = 'primary and nursery '
-            elif 'Prim' in name:
-                extraWDStatements.append(primarySchoolStatement)
-                tagsToSet['isced:level'] = '1'
-                level = 'primary '
-            elif 'kindergarten' in amenity or 'Nurser' in name or 'Kinderga' in name:
-                extraWDStatements.append(nurserySchoolStatement)
-                tagsToSet['isced:level'] = '0'
-                level = 'nursery '
-            elif 'Sec' in name or 'High' in name or 'College' in name:
-                extraWDStatements.append(secondarySchoolStatement)
-                tagsToSet['isced:level'] = '2;3;4'
-                level = 'secondary '
-            else:
-                extraWDStatements.append(schoolStatement)
-                tagsToSet['isced:level'] = ''; level = ''
 
             if not(description):
                 if city and not(city=='None'):
